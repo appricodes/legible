@@ -10,6 +10,7 @@ venv/
 build/
 dist/
 *.spec
+*.zip
 
 # IDE / editor
 .idea/
