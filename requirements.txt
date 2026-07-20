@@ -1,0 +1,54 @@
+# Core
+Pillow>=10.0
+reportlab>=4.0
+
+# PDF rendering, used by Import to rasterize multi-page PDFs into per-page
+# images (no poppler/Ghostscript dependency).
+pypdfium2>=4.0
+
+# GUI toolkit. wxPython wraps native OS controls, which screen readers (NVDA,
+# JAWS, Narrator, VoiceOver, Orca) read natively. Tkinter is NOT used because
+# it exposes no accessibility tree on Windows.
+wxPython>=4.2
+
+# --- OCR engines - install at least one; pick which to use in Settings ---
+# All three need a *language* to recognize non-English/Chinese text
+# correctly; set it once in Settings (see legible/languages.py).
+
+# PaddleOCR / PP-StructureV3: most accurate, structure-aware (real headings
+# and tables), slowest. Runs on CPU, no external server needed - model
+# weights download automatically from Hugging Face on first use and are
+# cached after that. The [all] extra pulls in paddlex's "ocr" extra, which
+# PP-StructureV3 needs (a bare `pip install paddleocr` is not enough).
+paddlepaddle>=3.0
+paddleocr[all]>=3.0
+
+# RapidOCR: lightweight ONNX text detection + recognition, faster and
+# lower-footprint than PaddleOCR but with no layout/heading/table awareness
+# (every line becomes a plain text block). Needs an inference backend
+# package; onnxruntime is the simplest (CPU, no extra setup).
+rapidocr>=3.0
+onnxruntime>=1.18
+
+# Tesseract, via pytesseract: fastest and lightest, but the ONE engine that
+# needs a separate, non-pip system install:
+#   1. The `tesseract` binary itself - NOT a pip package.
+#      Windows: https://github.com/UB-Mannheim/tesseract/wiki
+#      macOS:   brew install tesseract
+#      Linux:   apt install tesseract-ocr
+#   2. A .traineddata language pack matching your Settings language choice,
+#      e.g. deu.traineddata for German - download from
+#      https://github.com/tesseract-ocr/tessdata (or tessdata_fast for
+#      smaller/faster models) into tesseract's tessdata directory, or point
+#      TESSDATA_PREFIX at a folder containing it.
+# pytesseract itself is just a thin CLI wrapper around that binary.
+pytesseract>=0.3.10
+
+# --- Scanner backends (install the one for your OS to enable real scanning) ---
+# Choose the device, resolution, and color mode once in Settings; Add page
+# then scans directly with no chooser dialog. Without one of these installed
+# (or with none configured), Add page reports a clear error - use Import to
+# load an existing image/PDF instead.
+# Windows (WIA, recommended - no extra SDK): pywin32
+# Windows (TWAIN):                            pytwain
+# Linux / macOS (SANE):                       python-sane

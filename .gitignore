@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# IDE / editor
+.idea/
+.vscode/
+.claude/
+
+# OS cruft
+Thumbs.db
+.DS_Store
+
+# Stale/local test output (not source)
+sample_output.html
+sample_output.pdf

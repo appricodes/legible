@@ -1,0 +1,123 @@
+"""Data model: a Page holds the scanned image plus its OCR result.
+
+Kept deliberately simple and free of any GUI or OCR imports so it is easy
+to test and reason about.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+
+@dataclass
+class OcrBlock:
+    """One layout block returned by the OCR engine.
+
+    `label`   - block type, e.g. "Text", "SectionHeader", "Table", "Picture".
+    `html`    - block content as HTML (tables come as <table>..</table>).
+    `text`    - plain-text version of the block (tables flattened to rows).
+    `bbox`    - [x0, y0, x1, y1] position on the page image (pixels).
+    """
+
+    label: str
+    html: str
+    text: str
+    bbox: List[float] = field(default_factory=lambda: [0, 0, 0, 0])
+
+
+@dataclass
+class Page:
+    """A single scanned + OCR'd page."""
+
+    image_path: str
+    blocks: List[OcrBlock] = field(default_factory=list)
+    # Width/height of the source image in pixels (needed for PDF layout).
+    image_width: int = 0
+    image_height: int = 0
+    # A user-given name. When empty, the UI shows the text preview instead.
+    custom_name: str = ""
+    page_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # Assigned once by Session.add() and frozen from then on (see
+    # list_label) - 0 means "not yet added to a session".
+    auto_number: int = 0
+
+    # ---- derived text helpers -------------------------------------------
+
+    @property
+    def full_text(self) -> str:
+        """All block texts joined in reading order, blank line between blocks."""
+        return "\n\n".join(b.text for b in self.blocks if b.text.strip())
+
+    def preview(self, length: int = 128) -> str:
+        """First `length` characters of the OCR text, single-line."""
+        flat = " ".join(self.full_text.split())
+        if len(flat) <= length:
+            return flat
+        return flat[:length].rstrip() + "\u2026"  # ellipsis
+
+    def list_label(self, length: int = 128) -> str:
+        """The page's title: the custom name verbatim once the user has
+        renamed it (they own the whole string then), otherwise a default of
+        "Page {auto_number}: {preview}". `auto_number` is assigned once by
+        Session.add() and stays fixed after that - reordering pages (via
+        move up/down) never renumbers them, only Rename changes a title."""
+        if self.custom_name.strip():
+            return self.custom_name.strip()
+        text = self.preview(length)
+        return (f"Page {self.auto_number}: {text}" if text
+               else f"Page {self.auto_number} (no text detected)")
+
+
+@dataclass
+class Session:
+    """An ordered collection of pages."""
+
+    pages: List[Page] = field(default_factory=list)
+    # Monotonic counter behind Page.auto_number - only ever goes up, so a
+    # deleted/reordered page's number is never reused or shifted.
+    _next_number: int = field(default=1, init=False, repr=False)
+
+    # ---- list operations -------------------------------------------------
+
+    def add(self, page: Page) -> int:
+        page.auto_number = self._next_number
+        self._next_number += 1
+        self.pages.append(page)
+        return len(self.pages) - 1
+
+    def delete(self, index: int) -> None:
+        if 0 <= index < len(self.pages):
+            del self.pages[index]
+
+    def move_up(self, index: int) -> int:
+        """Swap the page with the one above it. Returns the new index."""
+        if index <= 0 or index >= len(self.pages):
+            return index
+        self.pages[index - 1], self.pages[index] = (
+            self.pages[index],
+            self.pages[index - 1],
+        )
+        return index - 1
+
+    def move_down(self, index: int) -> int:
+        """Swap the page with the one below it. Returns the new index."""
+        if index < 0 or index >= len(self.pages) - 1:
+            return index
+        self.pages[index + 1], self.pages[index] = (
+            self.pages[index],
+            self.pages[index + 1],
+        )
+        return index + 1
+
+    def rename(self, index: int, name: str) -> None:
+        if 0 <= index < len(self.pages):
+            self.pages[index].custom_name = name
+
+    def clear(self) -> None:
+        self.pages.clear()
+        self._next_number = 1
+
+    def __len__(self) -> int:
+        return len(self.pages)
