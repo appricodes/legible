@@ -22,7 +22,11 @@ COLOR_MODES = ("color", "gray", "bw")
 # loaded in the feeder in one Add page action. Only offered in Settings when
 # scanner.list_sources() reports the selected device actually supports it.
 SCANNER_SOURCES = ("auto", "flatbed", "adf")
-OCR_ENGINES = ("paddleocr", "rapidocr", "tesseract", "mock")
+# Docling always runs the pipeline (layout/table/heading detection); these
+# are the two text-recognition backends the user can pick for it in
+# Settings. "mock" is not user-selectable - it's an automatic fallback (see
+# legible/ocr.py) when Docling or the chosen backend isn't installed.
+OCR_ENGINES = ("easyocr", "rapidocr")
 # Offered as a dropdown in Settings rather than a free-entry spinner.
 PDF_IMAGE_QUALITY_CHOICES = tuple(range(5, 101, 5))  # 5, 10, 15, ..., 100
 PDF_IMAGE_DPI_CHOICES = (50, 100, 150, 200, 250, 300)
@@ -37,11 +41,12 @@ class AppSettings:
     scanner_dpi: int = 300
     scanner_color_mode: str = "color"  # one of COLOR_MODES
     scanner_source: str = "auto"  # one of SCANNER_SOURCES
-    ocr_engine: str = "paddleocr"  # one of OCR_ENGINES
-    # Canonical language code (see legible/languages.py), applied to whichever
-    # engine is active - each engine's default is Chinese-tuned or English-only
-    # and mishandles other Latin-script text otherwise (dropped diacritics,
-    # wrong punctuation, or an outright missing language pack for Tesseract).
+    ocr_engine: str = "easyocr"  # one of OCR_ENGINES (Docling's OCR backend)
+    # Canonical language code (see legible/languages.py), applied to
+    # whichever backend is active - EasyOCR's and RapidOCR's own defaults
+    # are Chinese/English-tuned and mishandle other languages otherwise
+    # (dropped diacritics, wrong punctuation, or an outright unsupported
+    # language for EasyOCR - see ocr.check_ocr_backend).
     ocr_lang: str = "de"
     # JPEG quality for each page's scanned image in the PDF export - one of
     # PDF_IMAGE_QUALITY_CHOICES. Page images are re-encoded as JPEG at this

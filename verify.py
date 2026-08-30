@@ -19,11 +19,15 @@ def make_test_image(path, text):
 
 
 def main():
+    # test_output/ is gitignored (see .gitignore) - never committed, so a
+    # fresh checkout won't have it; create it here rather than assuming.
+    os.makedirs("test_output", exist_ok=True)
+
     # 1. Model list operations
     s = Session()
-    p1 = ocr.ocr_page(make_test_image("/tmp/p1.png", "Page One"))
-    p2 = ocr.ocr_page(make_test_image("/tmp/p2.png", "Page Two"))
-    p3 = ocr.ocr_page(make_test_image("/tmp/p3.png", "Page Three"))
+    p1 = ocr.ocr_page(make_test_image("test_output/p1.png", "Page One"))
+    p2 = ocr.ocr_page(make_test_image("test_output/p2.png", "Page Two"))
+    p3 = ocr.ocr_page(make_test_image("test_output/p3.png", "Page Three"))
     s.add(p1); s.add(p2); s.add(p3)
     assert len(s) == 3
 
@@ -50,7 +54,7 @@ def main():
     print("full_text contains table rows: OK")
 
     # 3. HTML export
-    html_path = "/tmp/out.html"
+    html_path = "test_output/out.html"
     export.export_html(s, html_path, title="Test Doc")
     html = open(html_path, encoding="utf-8").read()
     assert "<table" in html and "Widget" in html and "<h2" in html
@@ -58,7 +62,7 @@ def main():
     print("HTML export: OK  (", os.path.getsize(html_path), "bytes )")
 
     # 4. PDF export
-    pdf_path = "/tmp/out.pdf"
+    pdf_path = "test_output/out.pdf"
     export.export_pdf(s, pdf_path, title="Test Doc")
     assert os.path.getsize(pdf_path) > 1000
     header = open(pdf_path, "rb").read(5)

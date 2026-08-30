@@ -6,11 +6,10 @@
 Set LEGIBLE_FORCE_MOCK=1 to always use the built-in mock OCR (no model),
 useful for trying the interface and export features on any machine.
 
-OCR engine and language are chosen in the Settings dialog (PaddleOCR,
-RapidOCR, or Tesseract - see legible/ocr.py). None need a separate setup
-step except Tesseract's own binary/language pack (not a pip package - see
-README): model weights for the others download automatically from Hugging
-Face the first time you add a page and are cached after that.
+OCR always runs through Docling; the text-recognition backend (EasyOCR or
+RapidOCR) and language are chosen in the Settings dialog (see
+legible/ocr.py). Model weights for whichever backend is selected download
+automatically the first time you add a page and are cached after that.
 """
 
 from legible.gui import main as gui_main

@@ -24,3 +24,8 @@ Thumbs.db
 # Stale/local test output (not source)
 sample_output.html
 sample_output.pdf
+
+# Scratch folder for test runs (verify.py, ad-hoc scripts) - never source,
+# never committed. Always write test artifacts here, not to system /tmp or
+# the repo root.
+test_output/

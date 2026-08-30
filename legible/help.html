@@ -57,16 +57,57 @@ currently loaded in the feeder</em> and adds them all, one after another.</p>
 dialog (see <a href="#background-jobs">Background jobs</a> below) - the
 window stays responsive, and you can cancel partway through.</p>
 
+<h3>Export and More menus</h3>
+<p>Two more buttons sit next to Add page, each a popup menu:</p>
+<ul>
+  <li><strong>Export</strong> (<kbd>Alt</kbd>+<kbd>E</kbd> or
+  <kbd>Ctrl</kbd>+<kbd>2</kbd>) - <strong>Export to PDF</strong> and
+  <strong>Export to HTML</strong>.</li>
+  <li><strong>More</strong> (<kbd>Alt</kbd>+<kbd>M</kbd> or
+  <kbd>Ctrl</kbd>+<kbd>3</kbd>) - <strong>Import files...</strong>,
+  <strong>Start new session</strong>, <strong>Settings...</strong>,
+  <strong>About Legible...</strong>, and <strong>Help</strong>.</li>
+</ul>
+<p>Once a menu is open, each item has its own underlined-letter shortcut,
+same as any menu. Add page itself also has a <kbd>Ctrl</kbd>+<kbd>1</kbd>
+shortcut, matching Export's Ctrl+2 and More's Ctrl+3 - all three work
+anywhere in the window, in addition to (not instead of) the Alt+ mnemonics
+above.</p>
+
 <h3>Import files</h3>
-<p><strong>Import files...</strong> loads existing image files (PNG, JPEG,
-TIFF, BMP) or <strong>multi-page PDFs</strong> instead of scanning from
-hardware - each page runs through OCR exactly like a fresh scan.</p>
+<p><strong>Import files...</strong> (in the More menu) loads existing image
+files (PNG, JPEG, TIFF, BMP) or <strong>multi-page PDFs</strong> instead of
+scanning from hardware - each page runs through OCR exactly like a fresh
+scan.</p>
 
 <h2 id="managing-pages">Managing pages</h2>
 
 <p>The <strong>Scanned pages</strong> list on the left shows every page in
-the current session, in order. Selecting a page shows its recognized text
-in the <strong>Full page text</strong> box on the right.</p>
+the current session, in order. Selecting a page renders its recognized
+content - real headings, paragraphs, and tables, not a flattened text dump -
+in the <strong>Page preview (HTML)</strong> box on the right: the exact same
+HTML Export to HTML would write for that page, shown in a real HTML-rendering
+widget a screen reader can navigate by heading and table, the same way it
+would navigate a web page.</p>
+
+<h3>Upside-down pages</h3>
+<p>Every scan/import gets a best-effort check for whether it was fed in
+rotated 180&deg; (needs Tesseract installed - see the README; if it's
+missing, this is simply skipped). If a page is detected upside down:</p>
+<ul>
+  <li>It's recognized and exported <strong>right-side up automatically</strong>
+  - the text is read correctly, and the PDF export shows it corrected.</li>
+  <li>Its default title gets a note right after the page number, before
+  the text preview - so it's the first thing you see or hear:
+  <strong>"Page 3 (scanned upside down - rotate 180&deg; before
+  filing): ..."</strong> - so you know which way to turn the <em>paper
+  original</em> when filing it.</li>
+  <li>You hear a spoken <strong>"Upside down page"</strong> cue right away
+  (via Windows text-to-speech, audible even without a screen reader
+  running), plus the usual status announcement.</li>
+</ul>
+<p>Only 180&deg; is corrected (the common "fed the page in upside-down"
+mistake) - the original scan file itself is never modified.</p>
 
 <h3>Page titles</h3>
 <p>Every page gets a title automatically the moment it's added:
@@ -79,22 +120,23 @@ whatever you type (no more auto "Page N:" prefix gets added back to a
 renamed page).</p>
 
 <h3>Reorder, delete, rename</h3>
-<ul>
-  <li><strong>Move up</strong> / <strong>Move down</strong> - reorder the
-  selected page.</li>
-  <li><strong>Delete</strong> - removes the selected page, after a
-  confirmation.</li>
-  <li><strong>Rename</strong> - replace a page's whole title with your own
-  text.</li>
-</ul>
+<p><strong>Move up</strong>, <strong>Move down</strong>,
+<strong>Rename</strong>, and <strong>Delete</strong> (removes the selected
+page, after a confirmation) all live in a context menu on the page itself,
+not as buttons: right-click a page (or press the keyboard
+<strong>Menu key</strong> / <strong>Shift+F10</strong> with a page selected
+- no mouse needed) to open it. Each item shows its existing keyboard
+shortcut too (<kbd>Ctrl</kbd>+<kbd>&uarr;</kbd>/<kbd>Ctrl</kbd>+<kbd>&darr;</kbd>
+for Move up/down, <kbd>F2</kbd> for Rename, <kbd>Delete</kbd> for Delete),
+so those still work directly without opening the menu at all.</p>
 
 <h3>Re-OCR all pages</h3>
-<p><strong>Re-OCR all pages...</strong> (visually separated from the
-per-page buttons, since it acts on the whole session) lets you pick a
-different OCR engine and re-run it on <em>every</em> page, discarding each
-page's current recognized text and replacing it with the new engine's
-result. Handy for comparing engines, or redoing a session after realizing
-the wrong engine or language was configured. It doesn't touch page order,
+<p><strong>Re-OCR all pages...</strong> (the only per-page-list action left
+as a button, since it acts on the whole session, not just one page) lets you pick a
+different OCR backend and re-run it on <em>every</em> page, discarding each
+page's current recognized text and replacing it with the new backend's
+result. Handy for comparing backends, or redoing a session after realizing
+the wrong backend or language was configured. It doesn't touch page order,
 images, or custom titles - only the recognized text - and asks for
 confirmation first, since it can't be undone.</p>
 
@@ -114,6 +156,11 @@ already in progress, only stop before starting the next one. Whatever
 completed before you cancelled is kept (pages already added or re-OCR'd
 stay in the session); a cancelled export never leaves a partial file on
 disk.</p>
+<p>Short synthesized sound effects also mark the key moments - scan start,
+OCR start, OCR finished, import finished, export finished, and any error -
+an audible cue alongside the progress dialog's text, useful even when
+you're not looking at the screen. They need no setup and work regardless of
+whether a screen reader is running.</p>
 
 <h2 id="exporting">Exporting</h2>
 <ul>
@@ -123,13 +170,19 @@ disk.</p>
   <li><strong>Export to PDF</strong> - each page shows the scanned image,
   with an invisible text layer underneath that screen readers can read
   (so the PDF both looks like the original scan <em>and</em> is fully
-  accessible). Table structure is preserved. Page images are re-encoded as
-  JPEG at Settings' <strong>PDF image quality</strong>, and capped to
-  Settings' <strong>PDF image DPI</strong> relative to their printed size -
-  both together can shrink an otherwise huge, losslessly-embedded scan down
-  several times over with no visible difference at normal viewing/print
-  sizes.</li>
+  accessible). Every heading/paragraph is its own individually tagged PDF
+  structure element - not one undivided block of text per page - so Adobe
+  Reader's Read Aloud and screen readers pause between them instead of
+  reading the whole page as one run-on sentence. Page images are
+  re-encoded as JPEG at Settings' <strong>PDF image quality</strong>, and
+  capped to Settings' <strong>PDF image DPI</strong> relative to their
+  printed size - both together can shrink an otherwise huge,
+  losslessly-embedded scan down several times over with no visible
+  difference at normal viewing/print sizes.</li>
 </ul>
+<p>Neither export shows a confirmation dialog when it finishes - the status
+line (spoken immediately) and a short sound cue are enough. Only an export
+<em>error</em> still shows a dialog.</p>
 
 <h2 id="settings">Settings</h2>
 <table>
@@ -138,33 +191,45 @@ disk.</p>
 <tr><td>Paper source</td><td>Flatbed, Automatic Document Feeder, or Automatic (leave the scanner's own current source untouched) - only offered when the selected scanner actually supports it.</td></tr>
 <tr><td>Resolution (DPI)</td><td>Scan resolution.</td></tr>
 <tr><td>Color mode</td><td>Color, grayscale, or black &amp; white.</td></tr>
-<tr><td>OCR engine</td><td>PaddleOCR (most accurate, slowest, real headings/tables), RapidOCR (fast, line-level text only), or Tesseract (fastest, needs a separate system install - see the README).</td></tr>
+<tr><td>OCR backend</td><td>OCR always runs through Docling (real headings/tables); pick EasyOCR (broadest language support, slower, needs PyTorch) or RapidOCR (fast, lightweight, no PyTorch) as its text-recognition backend.</td></tr>
 <tr><td>Preferred language</td><td>Applied to whichever engine is active - matters a lot for accuracy (diacritics, punctuation, or an outright missing language pack).</td></tr>
 <tr><td>PDF image quality</td><td>JPEG quality (5-100) for each page's image in the PDF export.</td></tr>
 <tr><td>PDF image DPI</td><td>Maximum resolution (50-300) for each page's image in the PDF, relative to its printed size - lower-resolution scans/imports are never upsampled past their own resolution.</td></tr>
 </table>
-<div class="note">If Tesseract is selected but its binary or the selected
-language's data pack isn't actually installed, Settings pops up a warning
-explaining exactly what's missing and how to install it - rather than
-silently falling back to a placeholder result later.</div>
+<div class="note">If Docling or the selected backend isn't actually
+installed, or the selected language isn't supported by it, Settings pops up
+a warning explaining exactly what's missing/unsupported and how to fix it -
+rather than silently falling back to a placeholder result later.</div>
 
 <h2 id="shortcuts">Keyboard shortcuts</h2>
 
-<h3>Main window (Alt + underlined letter)</h3>
+<h3>Main window</h3>
 <table>
 <tr><th>Shortcut</th><th>Action</th></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>A</kbd></td><td>Add page (scan + OCR)</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>I</kbd></td><td>Import files...</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>H</kbd></td><td>Export to HTML</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>P</kbd></td><td>Export to PDF</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>N</kbd></td><td>Start new session</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>S</kbd></td><td>Settings...</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>E</kbd> or <kbd>F1</kbd></td><td>Help (this page)</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>U</kbd></td><td>Move selected page up</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>D</kbd></td><td>Move selected page down</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>L</kbd></td><td>Delete selected page</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>R</kbd></td><td>Rename selected page</td></tr>
+<tr><td><kbd>Alt</kbd>+<kbd>A</kbd> or <kbd>Ctrl</kbd>+<kbd>1</kbd></td><td>Add page (scan + OCR)</td></tr>
+<tr><td><kbd>Alt</kbd>+<kbd>E</kbd> or <kbd>Ctrl</kbd>+<kbd>2</kbd></td><td>Open the Export menu</td></tr>
+<tr><td><kbd>Alt</kbd>+<kbd>M</kbd> or <kbd>Ctrl</kbd>+<kbd>3</kbd></td><td>Open the More menu</td></tr>
 <tr><td><kbd>Alt</kbd>+<kbd>O</kbd></td><td>Re-OCR all pages...</td></tr>
+<tr><td><kbd>F1</kbd></td><td>Help (this page) - works whether a menu is open or closed</td></tr>
+</table>
+<p class="note">Ctrl+1/2/3 work anywhere in the window regardless of focus,
+in addition to (not instead of) the Alt+ mnemonics.</p>
+
+<h3>Export menu (once open - underlined letter, no Alt needed)</h3>
+<table>
+<tr><th>Shortcut</th><th>Action</th></tr>
+<tr><td><kbd>P</kbd></td><td>Export to PDF</td></tr>
+<tr><td><kbd>H</kbd></td><td>Export to HTML</td></tr>
+</table>
+
+<h3>More menu (once open - underlined letter, no Alt needed)</h3>
+<table>
+<tr><th>Shortcut</th><th>Action</th></tr>
+<tr><td><kbd>I</kbd></td><td>Import files...</td></tr>
+<tr><td><kbd>N</kbd></td><td>Start new session</td></tr>
+<tr><td><kbd>S</kbd></td><td>Settings...</td></tr>
+<tr><td><kbd>A</kbd></td><td>About Legible...</td></tr>
+<tr><td><kbd>H</kbd></td><td>Help (same as <kbd>F1</kbd>)</td></tr>
 </table>
 
 <h3>When the page list has focus</h3>
@@ -175,11 +240,21 @@ silently falling back to a placeholder result later.</div>
 <tr><td><kbd>Ctrl</kbd>+<kbd>&darr;</kbd></td><td>Move the selected page down</td></tr>
 <tr><td><kbd>Delete</kbd></td><td>Delete the selected page (with confirmation)</td></tr>
 <tr><td><kbd>Insert</kbd></td><td>Add page (scan a new page)</td></tr>
-<tr><td><kbd>Enter</kbd></td><td>Move focus to the Full page text box</td></tr>
+<tr><td>Right-click, or <kbd>Menu</kbd>/<kbd>Shift</kbd>+<kbd>F10</kbd></td><td>Open the page context menu (Move up/down, Rename, Delete - see below)</td></tr>
+<tr><td><kbd>Enter</kbd></td><td>Move focus to the Page preview box</td></tr>
 <tr><td><kbd>F2</kbd></td><td>Rename the selected page</td></tr>
 </table>
 
-<h3>When the Full page text box has focus</h3>
+<h3>Page context menu (right-click a page, or Menu/Shift+F10 - underlined letter, no Alt needed)</h3>
+<table>
+<tr><th>Shortcut</th><th>Action</th></tr>
+<tr><td><kbd>U</kbd> (or <kbd>Ctrl</kbd>+<kbd>&uarr;</kbd> directly)</td><td>Move up</td></tr>
+<tr><td><kbd>D</kbd> (or <kbd>Ctrl</kbd>+<kbd>&darr;</kbd> directly)</td><td>Move down</td></tr>
+<tr><td><kbd>R</kbd> (or <kbd>F2</kbd> directly)</td><td>Rename</td></tr>
+<tr><td><kbd>L</kbd> (or <kbd>Delete</kbd> directly)</td><td>Delete</td></tr>
+</table>
+
+<h3>When the Page preview box has focus</h3>
 <table>
 <tr><th>Key</th><th>Action</th></tr>
 <tr><td><kbd>Esc</kbd></td><td>Move focus back to the page list</td></tr>
@@ -193,7 +268,7 @@ silently falling back to a placeholder result later.</div>
 <tr><td><kbd>Alt</kbd>+<kbd>P</kbd></td><td>Paper source</td></tr>
 <tr><td><kbd>Alt</kbd>+<kbd>R</kbd></td><td>Resolution (DPI)</td></tr>
 <tr><td><kbd>Alt</kbd>+<kbd>M</kbd></td><td>Color mode</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>E</kbd></td><td>OCR engine</td></tr>
+<tr><td><kbd>Alt</kbd>+<kbd>B</kbd></td><td>OCR backend</td></tr>
 <tr><td><kbd>Alt</kbd>+<kbd>L</kbd></td><td>Preferred language</td></tr>
 <tr><td><kbd>Alt</kbd>+<kbd>Q</kbd></td><td>PDF image quality</td></tr>
 <tr><td><kbd>Alt</kbd>+<kbd>D</kbd></td><td>PDF image DPI</td></tr>
@@ -216,10 +291,10 @@ silently falling back to a placeholder result later.</div>
 
 <h2 id="troubleshooting">Troubleshooting</h2>
 <ul>
-  <li><strong>OCR gives placeholder/mock text</strong> - the configured
-  engine's package (or, for Tesseract, its binary/language pack) isn't
-  actually installed; Settings will show which engine is really active, and
-  will warn you directly if Tesseract is the problem.</li>
+  <li><strong>OCR gives placeholder/mock text</strong> - Docling or the
+  configured backend's package isn't actually installed, or the selected
+  language isn't supported by it; Settings will show which backend is
+  really active, and will warn you directly about what's wrong.</li>
   <li><strong>Add page fails immediately</strong> - no scanner backend is
   installed or configured, or nothing responded; use
   <strong>Import files...</strong> to load an existing image or PDF

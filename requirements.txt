@@ -1,6 +1,10 @@
 # Core
 Pillow>=10.0
 reportlab>=4.0
+# Synthesizes the app's UI sound effects (legible/sounds.py) - kept as an
+# explicit core dependency (not just whatever docling/scikit-image pull in
+# transitively) so sound effects work even with no OCR backend installed.
+numpy>=1.24
 
 # PDF rendering, used by Import to rasterize multi-page PDFs into per-page
 # images (no poppler/Ghostscript dependency).
@@ -11,37 +15,41 @@ pypdfium2>=4.0
 # it exposes no accessibility tree on Windows.
 wxPython>=4.2
 
-# --- OCR engines - install at least one; pick which to use in Settings ---
-# All three need a *language* to recognize non-English/Chinese text
-# correctly; set it once in Settings (see legible/languages.py).
+# --- OCR: always via Docling (layout/heading/table detection); pick at
+# least one text-recognition backend to use in Settings ---
+# Both need a *language* to recognize non-English/Chinese text correctly;
+# set it once in Settings (see legible/languages.py).
 
-# PaddleOCR / PP-StructureV3: most accurate, structure-aware (real headings
-# and tables), slowest. Runs on CPU, no external server needed - model
-# weights download automatically from Hugging Face on first use and are
-# cached after that. The [all] extra pulls in paddlex's "ocr" extra, which
-# PP-StructureV3 needs (a bare `pip install paddleocr` is not enough).
-paddlepaddle>=3.0
-paddleocr[all]>=3.0
+# Docling itself: layout detection (paragraphs, headings, tables). Its own
+# layout/table-structure model weights download automatically on first use
+# and are cached after that - no OCR backend on its own, see the two
+# extras below.
+docling>=2.40
 
-# RapidOCR: lightweight ONNX text detection + recognition, faster and
-# lower-footprint than PaddleOCR but with no layout/heading/table awareness
-# (every line becomes a plain text block). Needs an inference backend
-# package; onnxruntime is the simplest (CPU, no extra setup).
-rapidocr>=3.0
+# EasyOCR backend (docling[easyocr]): broadest language coverage (80+
+# languages), but slowest and heaviest - depends on PyTorch (a large,
+# GB-scale download; CPU-only is fine, no GPU required). Its recognition
+# model downloads automatically on first use and is cached after that.
+docling[easyocr]>=2.40
+
+# RapidOCR backend (docling[rapidocr]): lightweight ONNX text recognition,
+# faster and lower-footprint than EasyOCR, no PyTorch dependency, and
+# covers every language Legible offers (including the one - Greek - EasyOCR
+# doesn't). Needs an inference backend package; onnxruntime is the simplest
+# (CPU, no extra setup).
+docling[rapidocr]>=2.40
 onnxruntime>=1.18
 
-# Tesseract, via pytesseract: fastest and lightest, but the ONE engine that
-# needs a separate, non-pip system install:
-#   1. The `tesseract` binary itself - NOT a pip package.
-#      Windows: https://github.com/UB-Mannheim/tesseract/wiki
-#      macOS:   brew install tesseract
-#      Linux:   apt install tesseract-ocr
-#   2. A .traineddata language pack matching your Settings language choice,
-#      e.g. deu.traineddata for German - download from
-#      https://github.com/tesseract-ocr/tessdata (or tessdata_fast for
-#      smaller/faster models) into tesseract's tessdata directory, or point
-#      TESSDATA_PREFIX at a folder containing it.
-# pytesseract itself is just a thin CLI wrapper around that binary.
+# --- Upside-down page detection (optional - see legible/orientation.py) ---
+# Purely a nice-to-have layered on top of OCR: if missing, pages just never
+# get auto-rotated/flagged, nothing else changes. Uses Tesseract's OSD
+# (orientation-and-script-detection) mode only - never reads page text, so
+# this is unrelated to (and much cheaper than) the old "Tesseract OCR
+# engine" option that was removed. Needs the same separate, non-pip
+# `tesseract` binary as that used to (see README):
+#   Windows: https://github.com/UB-Mannheim/tesseract/wiki
+#   macOS:   brew install tesseract
+#   Linux:   apt install tesseract-ocr
 pytesseract>=0.3.10
 
 # --- Scanner backends (install the one for your OS to enable real scanning) ---

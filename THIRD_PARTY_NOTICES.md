@@ -12,28 +12,33 @@ Python import, not statically linked or modified.
 |---|---|
 | Pillow | HPND |
 | reportlab | BSD |
+| numpy (synthesizes sound effects - legible/sounds.py) | BSD-3-Clause |
 | pypdfium2 | BSD-3-Clause / Apache-2.0 (dual) |
 | wxPython | wxWindows Library License (LGPL + a linking exception - explicitly permits use in non-LGPL projects) |
-| paddlepaddle, paddleocr, paddlex | Apache-2.0 |
-| rapidocr, onnxruntime | Apache-2.0 / MIT |
-| pytesseract | Apache-2.0 (wraps the separately-installed `tesseract` binary, also Apache-2.0 - not bundled by Legible; each user installs it themselves per the README) |
-| pywin32 | PSF License |
+| docling, docling-core, docling-ibm-models | MIT |
+| easyocr (EasyOCR backend) | Apache-2.0 |
+| torch, torchvision (EasyOCR's dependency) | BSD-3-Clause |
+| rapidocr, onnxruntime (RapidOCR backend) | Apache-2.0 / MIT |
+| pytesseract (upside-down page detection only - legible/orientation.py; wraps the separately-installed `tesseract` binary, also Apache-2.0 - not bundled by Legible, each user installs it themselves per the README) | Apache-2.0 |
+| pywin32 (also used for text-to-speech via SAPI - legible/tts.py) | PSF License |
 
 ### Transitive dependencies worth calling out
 
-Pulled in automatically by `paddleocr[all]` (PP-StructureV3's "ocr" extras):
-opencv-python(-contrib), shapely, pyclipper, scikit-learn, scipy, numpy,
-lxml, openpyxl, premailer, beautifulsoup4, einops, ftfy, imagesize, Jinja2,
-latex2mathml, regex, safetensors, sentencepiece, tiktoken, tokenizers -
-all Apache-2.0, BSD-3-Clause, or MIT. scipy/numpy's Windows wheels also
-bundle OpenBLAS (BSD-3-Clause) and a GCC runtime library (GPL-3.0 **with**
-the GCC Runtime Library Exception, which explicitly permits combination
-with non-GPL software) - neither imposes any obligation on Legible itself.
+Pulled in automatically by `docling[easyocr]` (Docling's own layout/table
+models plus EasyOCR's "ocr" extra): opencv-python(-contrib), scikit-image,
+scipy, numpy, python-bidi, shapely, pyclipper, Pillow, PyYAML,
+huggingface-hub, transformers, safetensors, ninja - all Apache-2.0,
+BSD-3-Clause, or MIT, except:
 
 - **python-bidi (LGPL-2.1+)**: used unmodified, as a normal Python import,
-  for bidirectional-text layout (e.g. Arabic/Hebrew) inside paddlex. Since
+  for bidirectional-text layout (e.g. Arabic/Hebrew) inside EasyOCR. Since
   the whole project is open source and this package isn't modified, this
   doesn't create any additional obligation beyond crediting it here.
+
+scipy/numpy's Windows wheels also bundle OpenBLAS (BSD-3-Clause) and a GCC
+runtime library (GPL-3.0 **with** the GCC Runtime Library Exception, which
+explicitly permits combination with non-GPL software) - neither imposes any
+obligation on Legible itself.
 
 ## Optional scanner backends (not in `requirements.txt` - install separately)
 
@@ -60,7 +65,7 @@ with non-GPL software) - neither imposes any obligation on Legible itself.
 
 ## Model weights
 
-PaddleOCR/RapidOCR/Tesseract model weights are downloaded by each user at
+Docling/EasyOCR/RapidOCR model weights are downloaded by each user at
 runtime from their original sources (not bundled or redistributed by this
 project), so their licenses are between the user and those sources, not a
 concern for Legible's own distribution.

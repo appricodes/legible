@@ -13,11 +13,21 @@ Accessibility choices (work with NVDA / JAWS / Narrator / VoiceOver / Orca):
     what's happening (e.g. "Saving page 3 of 11...") and offers Cancel, so
     the user always knows the app is working and can stop a long job rather
     than having to wait it out or guess whether it's frozen.
-  * Keyboard mnemonics via "&" in labels (Alt+A add, Alt+H html, Alt+P pdf,
-    Alt+N new, Alt+U up, Alt+D down, Alt+L delete, Alt+R rename). wx draws the
-    underline and wires the accelerator automatically.
+  * Keyboard mnemonics via "&" in labels (Alt+A add page, Alt+E export,
+    Alt+M open the More menu). wx draws the underline and wires the
+    accelerator automatically - same mechanism inside the Export/More popup
+    menus themselves (their own items each have a mnemonic, active once
+    that menu is open) and the page list's right-click/Menu-key context
+    menu (Move up/down, Rename, Delete). The three top buttons also have
+    dedicated global accelerators - Ctrl+1 Add page, Ctrl+2 Export, Ctrl+3
+    More - active anywhere in the window regardless of focus, in addition
+    to (not instead of) their Alt+ mnemonics.
   * The page list is a native wx.ListBox: arrowing through it makes the screen
-    reader speak the item text and its position ("3 of 8").
+    reader speak the item text and its position ("3 of 8"). Move up/down,
+    Rename, and Delete are reached via that context menu (mouse right-click,
+    or the keyboard Menu key/Shift+F10 - no mouse required) or their
+    existing shortcuts (Ctrl+Up/Down, F2, Delete), shown alongside each item
+    in the menu so they stay discoverable without a dedicated button each.
   * State changes move focus to the relevant control so the result is spoken
     (after Add page the new item is selected and the list is focused; after
     Move up the item stays selected at its new position; etc.).
@@ -32,18 +42,42 @@ Accessibility choices (work with NVDA / JAWS / Narrator / VoiceOver / Orca):
     background thread now that neither shows a UI.
   * Import lets you load existing image files or multi-page PDFs instead of
     scanning from hardware.
+  * The page-detail pane is a real wx.html2.WebView (native Edge/WebView2 on
+    Windows) rendering the page's actual generated HTML (export.
+    render_page_preview_html - the same per-block HTML export_html() writes),
+    not a flattened text dump: a screen reader entering it meets real
+    headings/tables/paragraphs it can navigate by structure, matching what
+    Export to HTML produces. wx.html.HtmlWindow (the classic, self-drawn
+    HTML widget) was deliberately not used - unlike a real embedded browser
+    engine, it doesn't expose a proper accessibility tree. Esc still moves
+    focus back to the page list from inside it (see _make_page_preview) -
+    keystrokes inside a real browser engine don't reach wx's usual
+    EVT_CHAR_HOOK, so this is done via a small injected script reporting
+    back through AddScriptMessageHandler instead.
+  * Every scan gets a best-effort upside-down check (legible/orientation.py);
+    a page found rotated 180 degrees is OCR'd and exported right-side up
+    automatically, its list label gets a text note, and it's announced both
+    ways at once - a direct spoken TTS cue via legible/tts.py ("Upside down
+    page", heard regardless of whether a screen reader is running) plus the
+    usual screen-reader-readable status announcement.
+  * Short synthesized sound effects (legible/sounds.py - richer than a plain
+    beep, never blocking) mark scan/OCR start and finish, import/export
+    success, and errors - an audible channel alongside the visual/spoken
+    ones above, useful even when not looking at the screen.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import webbrowser
 
 import wx
+import wx.html2
 
-from . import export, importer, languages, ocr, scanner
+from . import __version__, export, importer, languages, ocr, scanner, sounds, tts
 from . import settings as app_settings
 from .model import Session
 
@@ -56,6 +90,31 @@ def _help_html_path() -> str:
     if hasattr(sys, "_MEIPASS"):
         return os.path.join(sys._MEIPASS, "legible", "help.html")
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "help.html")
+
+
+def _new_html_view(parent):
+    """Create a real HTML-rendering widget (native Edge/WebView2 on
+    Windows) - used for both the page-detail pane and the About box, so
+    both give a screen reader real navigable structure instead of a text
+    dump. Falls back to a plain read-only text control only if no WebView
+    backend is available at all (e.g. no WebView2 runtime and no other
+    backend present - rare on a supported Windows install).
+
+    Returns (widget, is_webview) - callers branch on is_webview to call
+    SetPage() (WebView) or SetValue() (the plain-text fallback) when
+    loading content.
+    """
+    try:
+        if wx.html2.WebView.IsBackendAvailable(wx.html2.WebViewBackendEdge):
+            view = wx.html2.WebView.New(parent, backend=wx.html2.WebViewBackendEdge)
+        else:
+            view = wx.html2.WebView.New(parent)
+        if view is not None:
+            return view, True
+    except Exception:
+        pass
+    return (wx.TextCtrl(parent, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2),
+            False)
 
 
 _IMPORT_WILDCARD = (
@@ -78,10 +137,8 @@ _COLOR_MODE_CHOICES = [
     ("bw", "Black && White"),
 ]
 _OCR_ENGINE_CHOICES = [
-    ("paddleocr", "PaddleOCR (most accurate, slowest)"),
-    ("rapidocr", "RapidOCR (fast, lightweight)"),
-    ("tesseract", "Tesseract (fastest - needs separate install, see README)"),
-    ("mock", "Mock (testing only - no real OCR)"),
+    ("easyocr", "EasyOCR (broadest language support, slower, needs PyTorch)"),
+    ("rapidocr", "RapidOCR (fast, lightweight, no PyTorch)"),
 ]
 
 
@@ -204,11 +261,130 @@ class ProgressDialog(wx.Dialog):
             self.EndModal(result)
 
 
+def _about_html() -> str:
+    """Static About/credits page shown by AboutDialog: a short English
+    summary of what Legible is, plus attribution for the open-source
+    libraries and models it's built on. Full license text for every
+    dependency lives in THIRD_PARTY_NOTICES.md alongside the source - this
+    is a human-readable pointer to that, not a replacement for it."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>About Legible</title>
+<style>
+  body {{ font-family: Georgia, serif; line-height: 1.6; color: #1a1a1a;
+          margin: 1.1rem; }}
+  h1 {{ margin-bottom: 0; }}
+  .tagline {{ color: #555; margin-top: .2rem; }}
+  h2 {{ border-bottom: 1px solid #ccc; padding-bottom: .2rem; margin-top: 1.5rem; }}
+  dt {{ font-weight: bold; margin-top: .7rem; }}
+  dd {{ margin: .15rem 0 0 0; color: #333; }}
+  .note {{ color: #555; font-size: .9em; margin-top: 1.5rem; }}
+  a {{ color: #0645ad; }}
+</style>
+</head>
+<body>
+<h1>Legible</h1>
+<p class="tagline">An accessible document scanner &mdash; version {__version__}</p>
+<p>Legible scans paper documents (or imports existing images and PDFs),
+runs optical character recognition to turn them into real text, and
+exports clean, structured HTML or a tagged, screen-reader-readable PDF.
+It's built around native accessible controls throughout, so it works well
+with NVDA, JAWS, Narrator, VoiceOver, and Orca.</p>
+
+<h2>Built with</h2>
+<dl>
+  <dt><a href="https://github.com/docling-project/docling">Docling</a></dt>
+  <dd>Document layout analysis - finds paragraphs, headings, and tables on
+  the page.</dd>
+
+  <dt><a href="https://github.com/JaidedAI/EasyOCR">EasyOCR</a></dt>
+  <dd>Deep-learning text-recognition backend, covering 80+ languages.</dd>
+
+  <dt><a href="https://github.com/RapidAI/RapidOCR">RapidOCR</a></dt>
+  <dd>Lightweight ONNX text-recognition backend - fast, no GPU needed.</dd>
+
+  <dt><a href="https://pytorch.org/">PyTorch</a></dt>
+  <dd>Deep-learning framework powering the EasyOCR backend.</dd>
+
+  <dt><a href="https://github.com/tesseract-ocr/tesseract">Tesseract OCR</a></dt>
+  <dd>Used only for its orientation detector, to spot pages scanned
+  upside down - never to read page text.</dd>
+
+  <dt><a href="https://wxpython.org/">wxPython</a></dt>
+  <dd>The native, accessible GUI toolkit this whole interface is built on
+  (including this About box).</dd>
+
+  <dt><a href="https://www.reportlab.com/opensource/">ReportLab</a></dt>
+  <dd>Generates the tagged, accessible PDF export.</dd>
+
+  <dt><a href="https://github.com/pypdfium2-team/pypdfium2">pypdfium2</a></dt>
+  <dd>Renders multi-page PDFs into page images for Import.</dd>
+
+  <dt><a href="https://numpy.org/">NumPy</a></dt>
+  <dd>Synthesizes the app's UI sound effects.</dd>
+
+  <dt>Windows SAPI</dt>
+  <dd>Text-to-speech for spoken cues (e.g. "Upside down page"), reached
+  through pywin32.</dd>
+</dl>
+
+<p class="note">Full license details for every dependency are listed in
+THIRD_PARTY_NOTICES.md, alongside the source code.</p>
+</body>
+</html>
+"""
+
+
+class AboutDialog(wx.Dialog):
+    """About/credits box, opened from the More menu's &About... item: app
+    description plus open-source attribution, shown in a real
+    HTML-rendering widget (see _new_html_view) so a screen reader can
+    navigate it by heading, the same way it navigates the page-detail
+    pane."""
+
+    def __init__(self, parent):
+        super().__init__(parent, title="About Legible",
+                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+                         size=(560, 520))
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        view, is_webview = _new_html_view(self)
+        view.SetName("About Legible")
+        if is_webview:
+            view.Bind(wx.html2.EVT_WEBVIEW_NAVIGATING, self._on_navigating)
+            view.SetPage(_about_html(), "")
+        else:
+            # No WebView backend at all (rare) - crude tag-stripped
+            # fallback rather than leaving raw HTML markup on screen.
+            view.SetValue(re.sub(r"<[^>]+>", " ", _about_html()).strip())
+        outer.Add(view, 1, wx.EXPAND | wx.ALL, 12)
+
+        btns = self.CreateButtonSizer(wx.CLOSE)
+        outer.Add(btns, 0, wx.EXPAND | wx.ALL, 10)
+        self.Bind(wx.EVT_BUTTON, lambda evt: self.EndModal(wx.ID_CLOSE), id=wx.ID_CLOSE)
+
+        self.SetSizer(outer)
+        self.CentreOnParent()
+
+    def _on_navigating(self, event):
+        # Credit links should open in the system browser, not navigate this
+        # dialog's embedded view away from the About page itself - same
+        # webbrowser.open() pattern the Help button uses, just triggered by
+        # a link click instead of F1.
+        url = event.GetURL()
+        if url and url.startswith(("http://", "https://")):
+            event.Veto()
+            webbrowser.open(url)
+
+
 class SettingsDialog(wx.Dialog):
-    """Scanner (backend/device/DPI/color mode) and OCR engine choice.
+    """Scanner (backend/device/DPI/color mode) and OCR backend choice.
 
     Saved via legible.settings; Add page then scans directly with no chooser
-    of its own, and OCR uses whichever engine is configured here.
+    of its own, and OCR (always via Docling) uses whichever backend is
+    configured here.
     """
 
     def __init__(self, parent):
@@ -265,21 +441,21 @@ class SettingsDialog(wx.Dialog):
         grid.Add(wx.StaticLine(self), 0, wx.EXPAND | wx.TOP, 4)
         grid.Add(wx.StaticLine(self), 0, wx.EXPAND | wx.TOP, 4)
 
-        grid.Add(wx.StaticText(self, label="OCR &engine:"),
+        grid.Add(wx.StaticText(self, label="OCR &backend:"),
                  0, wx.ALIGN_CENTER_VERTICAL)
         self.engine_choice = wx.Choice(
             self, choices=[label for _, label in _OCR_ENGINE_CHOICES])
-        self.engine_choice.Bind(wx.EVT_CHOICE, self._on_engine_or_lang_changed)
+        self.engine_choice.Bind(wx.EVT_CHOICE, self._on_engine_changed)
         grid.Add(self.engine_choice, 1, wx.EXPAND)
 
-        # Applies to whichever engine is selected above - see
-        # legible/languages.py for how one choice maps to each engine's own
-        # language code/model.
+        # Applies to whichever backend is selected above - filtered to that
+        # backend's own supported languages (see legible/languages.py); if
+        # switching backend drops the current language from the list, falls
+        # back to English (see _refresh_languages).
         grid.Add(wx.StaticText(self, label="Preferred &language:"),
                  0, wx.ALIGN_CENTER_VERTICAL)
-        self.lang_list = languages.all_languages()
-        self.lang_choice = wx.Choice(
-            self, choices=[lang.display_name for lang in self.lang_list])
+        self.lang_list = []
+        self.lang_choice = wx.Choice(self, choices=[])
         self.lang_choice.Bind(wx.EVT_CHOICE, self._on_engine_or_lang_changed)
         grid.Add(self.lang_choice, 1, wx.EXPAND)
 
@@ -323,8 +499,7 @@ class SettingsDialog(wx.Dialog):
         self._select_by_value(self.engine_choice,
                               [v for v, _ in _OCR_ENGINE_CHOICES],
                               self.cfg.ocr_engine)
-        lang_codes = [lang.code for lang in self.lang_list]
-        self._select_by_value(self.lang_choice, lang_codes, self.cfg.ocr_lang)
+        self._refresh_languages(select_lang=self.cfg.ocr_lang)
         self._select_nearest(self.pdf_quality_choice,
                              app_settings.PDF_IMAGE_QUALITY_CHOICES,
                              self.cfg.pdf_image_quality)
@@ -332,25 +507,49 @@ class SettingsDialog(wx.Dialog):
                              app_settings.PDF_IMAGE_DPI_CHOICES,
                              self.cfg.pdf_image_dpi)
 
-        # Also check right when the dialog opens, in case Tesseract is
-        # already the saved engine and isn't (or is no longer) actually
-        # usable - otherwise the only sign would be Mock OCR silently
-        # kicking in later, at scan time.
-        self._maybe_warn_tesseract()
+        # Also check right when the dialog opens, in case the saved
+        # backend/language combo isn't (or is no longer) actually usable -
+        # otherwise the only sign would be Mock OCR silently kicking in
+        # later, at scan time.
+        self._maybe_warn_engine()
+
+    def _on_engine_changed(self, event):
+        event.Skip()
+        # Switching backend can drop the currently-selected language from
+        # the list entirely (e.g. Greek only exists under RapidOCR) - keep
+        # the language choice restricted to what the new backend actually
+        # supports, falling back to English if the old choice doesn't fit.
+        engine = _OCR_ENGINE_CHOICES[self.engine_choice.GetSelection()][0]
+        current_code = (self.lang_list[self.lang_choice.GetSelection()].code
+                        if self.lang_list and self.lang_choice.GetSelection() != wx.NOT_FOUND
+                        else self.cfg.ocr_lang)
+        self._refresh_languages(select_lang=current_code)
+        self._maybe_warn_engine()
+
+    def _refresh_languages(self, select_lang: str):
+        """Populate the language dropdown with only the languages the
+        currently-selected backend supports (see
+        languages.supported_languages). Selects `select_lang` if the new
+        backend still supports it, otherwise falls back to English."""
+        engine = _OCR_ENGINE_CHOICES[self.engine_choice.GetSelection()][0]
+        self.lang_list = languages.supported_languages(engine)
+        self.lang_choice.Set([lang.display_name for lang in self.lang_list])
+        lang_codes = [lang.code for lang in self.lang_list]
+        fallback = "en" if "en" in lang_codes else (lang_codes[0] if lang_codes else "")
+        target = select_lang if select_lang in lang_codes else fallback
+        self._select_by_value(self.lang_choice, lang_codes, target)
 
     def _on_engine_or_lang_changed(self, event):
         event.Skip()
-        self._maybe_warn_tesseract()
+        self._maybe_warn_engine()
 
-    def _maybe_warn_tesseract(self):
+    def _maybe_warn_engine(self):
         engine = _OCR_ENGINE_CHOICES[self.engine_choice.GetSelection()][0]
-        if engine != "tesseract":
-            return
         lang_code = self.lang_list[self.lang_choice.GetSelection()].code
-        problem = ocr.check_tesseract(lang_code)
+        problem = ocr.check_ocr_backend(engine, lang_code)
+        title = "OCR backend isn't ready"
         if problem:
-            wx.MessageBox(problem, "Tesseract isn't ready",
-                          wx.OK | wx.ICON_WARNING, self)
+            wx.MessageBox(problem, title, wx.OK | wx.ICON_WARNING, self)
 
     def _select_by_value(self, choice_ctrl, values, value):
         try:
@@ -419,6 +618,7 @@ class SettingsDialog(wx.Dialog):
 class LegibleFrame(wx.Frame):
     _PHASE_MESSAGES = {
         "scan": "Scanning the page",
+        "orientation": "Checking page orientation",
         "download": (
             "Downloading the OCR model (first run only). This can take a few "
             "minutes; it is saved for next time"
@@ -458,41 +658,71 @@ class LegibleFrame(wx.Frame):
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
+    def _make_page_preview(self, panel):
+        """Build the page-detail pane via _new_html_view(): the selected
+        page's *generated HTML* (export.render_page_preview_html - real
+        headings/tables/paragraphs) is shown as structured content a screen
+        reader can navigate, not a flattened text blob.
+
+        Sets self._preview_is_webview so _show_page_text() knows whether to
+        call SetPage() (WebView) or SetValue() (the plain-text fallback).
+
+        For the WebView case, also wires up Esc-inside-the-page-content ->
+        focus back to the page list: keystrokes inside a real embedded
+        browser control are handled by the browser engine itself, not
+        wx's usual EVT_CHAR_HOOK on the frame (unlike every other control
+        in this window), so catching Esc there needs a small injected
+        script (see _show_page_text) reporting back through
+        AddScriptMessageHandler/EVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED rather
+        than a wx key event."""
+        view, self._preview_is_webview = _new_html_view(panel)
+        if self._preview_is_webview:
+            view.AddScriptMessageHandler("legible")
+            view.Bind(wx.html2.EVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED,
+                     self._on_preview_script_message)
+        return view
+
+    def _on_preview_script_message(self, event):
+        if event.GetString() == "escape":
+            self.listbox.SetFocus()
+
     def _build_ui(self):
         panel = wx.Panel(self)
         self.panel = panel
         outer = wx.BoxSizer(wx.VERTICAL)
 
         # --- top action bar --------------------------------------------
+        # Three buttons: Add page, Export (its own popup menu - PDF/HTML),
+        # and More (everything else - see on_more_menu/on_export_menu).
         top = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_add = wx.Button(panel, label="&Add page (scan + OCR)")
         self.btn_add.Bind(wx.EVT_BUTTON, self.on_add_page)
-        self.btn_import = wx.Button(panel, label="&Import files...")
-        self.btn_import.Bind(wx.EVT_BUTTON, self.on_import)
-        self.btn_export_html = wx.Button(panel, label="Export to &HTML")
-        self.btn_export_html.Bind(wx.EVT_BUTTON, self.on_export_html)
-        self.btn_export_pdf = wx.Button(panel, label="Export to &PDF")
-        self.btn_export_pdf.Bind(wx.EVT_BUTTON, self.on_export_pdf)
-        self.btn_new = wx.Button(panel, label="Start &new session")
-        self.btn_new.Bind(wx.EVT_BUTTON, self.on_new_session)
-        self.btn_settings = wx.Button(panel, label="&Settings...")
-        self.btn_settings.Bind(wx.EVT_BUTTON, self.on_settings)
-        # "Help" starts with H, already taken by "Export to &HTML" in this
-        # window - mnemonic goes on the second letter instead (H&elp),
-        # matching the usual convention when the first letter collides.
-        self.btn_help = wx.Button(panel, label="H&elp (F1)")
-        self.btn_help.Bind(wx.EVT_BUTTON, self.on_help)
-        for b in (self.btn_add, self.btn_import, self.btn_export_html,
-                  self.btn_export_pdf, self.btn_new, self.btn_settings,
-                  self.btn_help):
-            top.Add(b, 0, wx.ALL, 4)
+        top.Add(self.btn_add, 0, wx.ALL, 4)
+        self.btn_export = wx.Button(panel, label="&Export")
+        self.btn_export.Bind(wx.EVT_BUTTON, self.on_export_menu)
+        top.Add(self.btn_export, 0, wx.ALL, 4)
+        self.btn_more = wx.Button(panel, label="&More")
+        self.btn_more.Bind(wx.EVT_BUTTON, self.on_more_menu)
+        top.Add(self.btn_more, 0, wx.ALL, 4)
 
-        # F1 works everywhere in the window, not just when the Help button
-        # itself has focus - the usual convention for a help key.
+        # Global accelerators, active anywhere in the window regardless of
+        # focus - Ctrl+1/2/3 for the three buttons above (in addition to
+        # their own Alt+ mnemonics), and F1 for Help everywhere, not just
+        # from inside the More menu.
+        add_page_accel_id = wx.NewIdRef()
+        self.Bind(wx.EVT_MENU, self.on_add_page, id=add_page_accel_id)
+        export_accel_id = wx.NewIdRef()
+        self.Bind(wx.EVT_MENU, self.on_export_menu, id=export_accel_id)
+        more_accel_id = wx.NewIdRef()
+        self.Bind(wx.EVT_MENU, self.on_more_menu, id=more_accel_id)
         help_menu_id = wx.NewIdRef()
         self.Bind(wx.EVT_MENU, self.on_help, id=help_menu_id)
-        self.SetAcceleratorTable(wx.AcceleratorTable(
-            [(wx.ACCEL_NORMAL, wx.WXK_F1, help_menu_id)]))
+        self.SetAcceleratorTable(wx.AcceleratorTable([
+            (wx.ACCEL_CTRL, ord("1"), add_page_accel_id),
+            (wx.ACCEL_CTRL, ord("2"), export_accel_id),
+            (wx.ACCEL_CTRL, ord("3"), more_accel_id),
+            (wx.ACCEL_NORMAL, wx.WXK_F1, help_menu_id),
+        ]))
         outer.Add(top, 0, wx.EXPAND | wx.ALL, 6)
 
         # --- middle: list (left) + text (right) ------------------------
@@ -507,26 +737,19 @@ class LegibleFrame(wx.Frame):
         self.listbox.SetName("Scanned pages")
         self.listbox.Bind(wx.EVT_LISTBOX, self.on_select_page)
         self.listbox.Bind(wx.EVT_KEY_DOWN, self._on_listbox_key_down)
+        # Move up/down, Rename, and Delete all live in a right-click (or
+        # Menu key/Shift+F10 - EVT_CONTEXT_MENU fires for both, so this is
+        # reachable without a mouse too) context menu on the page itself
+        # instead of separate buttons - their keyboard shortcuts
+        # (Ctrl+Up/Down, F2, Delete, still wired in _on_listbox_key_down)
+        # are unchanged and shown alongside each item in that menu.
+        self.listbox.Bind(wx.EVT_CONTEXT_MENU, self._on_listbox_context_menu)
         left.Add(self.listbox, 1, wx.EXPAND | wx.BOTTOM, 6)
 
+        # Re-OCR all pages is the only button left below the list - it acts
+        # on the whole session, not a single page, so it stays a direct
+        # button rather than joining the per-page context menu above.
         pagebtns = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_up = wx.Button(panel, label="Move &up")
-        self.btn_up.Bind(wx.EVT_BUTTON, self.on_move_up)
-        self.btn_down = wx.Button(panel, label="Move &down")
-        self.btn_down.Bind(wx.EVT_BUTTON, self.on_move_down)
-        self.btn_delete = wx.Button(panel, label="De&lete")
-        self.btn_delete.Bind(wx.EVT_BUTTON, self.on_delete)
-        self.btn_rename = wx.Button(panel, label="&Rename")
-        self.btn_rename.Bind(wx.EVT_BUTTON, self.on_rename)
-        for b in (self.btn_up, self.btn_down, self.btn_delete, self.btn_rename):
-            pagebtns.Add(b, 0, wx.RIGHT, 4)
-        # Visual separator: everything to its left acts on the *selected*
-        # page; everything to its right (just Re-OCR) acts on the *whole*
-        # session. Purely visual grouping for sighted users - it isn't
-        # focusable, so tab order for screen reader users still flows
-        # straight from Rename to Re-OCR in natural creation order.
-        pagebtns.Add(wx.StaticLine(panel, style=wx.LI_VERTICAL),
-                    0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
         self.btn_reocr = wx.Button(panel, label="Re-&OCR all pages...")
         self.btn_reocr.SetToolTip(
             "Re-run OCR on every page using a different engine, discarding "
@@ -539,13 +762,10 @@ class LegibleFrame(wx.Frame):
 
         right = wx.BoxSizer(wx.VERTICAL)
         right.Add(
-            wx.StaticText(panel, label="Full page text:"), 0, wx.BOTTOM, 4,
+            wx.StaticText(panel, label="Page preview (HTML):"), 0, wx.BOTTOM, 4,
         )
-        self.text_area = wx.TextCtrl(
-            panel,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2,
-        )
-        self.text_area.SetName("Full page text")
+        self.text_area = self._make_page_preview(panel)
+        self.text_area.SetName("Page preview")
         right.Add(self.text_area, 1, wx.EXPAND)
         middle.Add(right, 2, wx.EXPAND | wx.ALL, 6)
 
@@ -602,6 +822,31 @@ class LegibleFrame(wx.Frame):
         else:
             self.set_status(f"Ready. {ocr.engine_display_name()} engine loaded.")
 
+    def _show_error(self, message: str, title: str) -> None:
+        """Show an error dialog paired with the app's "error" earcon (see
+        legible/sounds.py), so a failure is audible even if the user isn't
+        looking at the screen when it happens - every error dialog in the
+        app goes through this instead of calling wx.MessageBox directly."""
+        sounds.play("error")
+        wx.MessageBox(message, title, wx.OK | wx.ICON_ERROR, self)
+
+    def _maybe_announce_rotation(self, page):
+        """If legible.orientation detected this page scanned upside down
+        (Page.rotation == 180 - see ocr._run_ocr), speak a direct TTS cue
+        (audible regardless of whether a screen reader is running - see
+        legible/tts.py) plus the usual screen-reader-readable status
+        announcement. The page's list label already carries a matching
+        text note (see Page.list_label) so the flag isn't lost once this
+        one-off announcement has passed."""
+        if page.rotation != 180:
+            return
+        tts.speak_async("Upside down page")
+        self.announce(
+            f"Warning: {page.list_label(60)} was scanned upside down. It "
+            "will appear right-side up in exports, but rotate the "
+            "original paper 180 degrees before filing it."
+        )
+
     # ------------------------------------------------------------------
     # List management
     # ------------------------------------------------------------------
@@ -620,11 +865,77 @@ class LegibleFrame(wx.Frame):
         sel = self.listbox.GetSelection()
         return sel if sel != wx.NOT_FOUND else None
 
+    # Reports Esc back to Python via the "legible" script message handler
+    # registered in _make_page_preview - see its docstring for why this,
+    # rather than a wx key event, is what's needed for a real embedded
+    # browser control.
+    _ESCAPE_SCRIPT = (
+        "<script>document.addEventListener('keydown', function(e) {"
+        "if (e.key === 'Escape') { window.legible.postMessage('escape'); }"
+        "});</script>"
+    )
+
     def _show_page_text(self, index):
         if index is not None and 0 <= index < len(self.session):
-            self.text_area.SetValue(self.session.pages[index].full_text)
+            page = self.session.pages[index]
+            html = export.render_page_preview_html(page)
+            text = page.full_text
         else:
-            self.text_area.SetValue("")
+            html = ""
+            text = ""
+        if self._preview_is_webview:
+            # Inject the Esc-handling script right before </body> (falling
+            # back to appending it if that's ever not found - export.py's
+            # template always has one, but this shouldn't hard-fail either
+            # way) - SetPage(html, baseUrl) loads the string directly, no
+            # temp file needed. An empty string is a valid (blank) page.
+            if "</body>" in html:
+                html = html.replace("</body>", self._ESCAPE_SCRIPT + "</body>", 1)
+            else:
+                html += self._ESCAPE_SCRIPT
+            self.text_area.SetPage(html, "")
+        else:
+            self.text_area.SetValue(text)
+
+    # ------------------------------------------------------------------
+    # Export menu (its own button - PDF / HTML) and More menu (everything
+    # else: Import / New session / Settings / About / Help)
+    # ------------------------------------------------------------------
+    def _popup_menu_item(self, menu, label, handler):
+        """Append one item to `menu` that calls `handler()` (no event arg,
+        same as a button click via event=None) - each item gets a private
+        id via wx.NewIdRef() so binding it doesn't collide with anything
+        else in the window."""
+        item_id = wx.NewIdRef()
+        menu.Append(item_id, label)
+        self.Bind(wx.EVT_MENU, lambda evt, h=handler: h(), id=item_id)
+
+    def on_export_menu(self, event=None):
+        menu = wx.Menu()
+        self._popup_menu_item(menu, "Export to &PDF", self.on_export_pdf)
+        self._popup_menu_item(menu, "Export to &HTML", self.on_export_html)
+        self.btn_export.PopupMenu(menu, (0, self.btn_export.GetSize().GetHeight()))
+        menu.Destroy()
+
+    def on_more_menu(self, event=None):
+        menu = wx.Menu()
+        self._popup_menu_item(menu, "&Import files...", self.on_import)
+        self._popup_menu_item(menu, "Start &new session", self.on_new_session)
+        menu.AppendSeparator()
+        self._popup_menu_item(menu, "&Settings...", self.on_settings)
+        self._popup_menu_item(menu, "&About Legible...", self.on_about)
+        menu.AppendSeparator()
+        # \tF1 is an accurate hint, not a fabricated one - F1 opens Help
+        # globally regardless of this menu (see the accelerator table in
+        # _build_ui), so it still works with the menu closed too.
+        self._popup_menu_item(menu, "&Help\tF1", self.on_help)
+        self.btn_more.PopupMenu(menu, (0, self.btn_more.GetSize().GetHeight()))
+        menu.Destroy()
+
+    def on_about(self, event=None):
+        with AboutDialog(self) as dlg:
+            dlg.ShowModal()
+        self.btn_more.SetFocus()
 
     # ------------------------------------------------------------------
     # Add page (scan + OCR) - scan_pages() returns one image per page; more
@@ -645,6 +956,7 @@ class LegibleFrame(wx.Frame):
         self._set_actions_enabled(False)
         progress_dlg = ProgressDialog(self, "Add page")
         progress_dlg.set_message(self._PHASE_MESSAGES["scan"] + "...", phase_key="scan")
+        sounds.play("scan_start")
 
         def worker():
             cfg = app_settings.load_settings()
@@ -673,6 +985,7 @@ class LegibleFrame(wx.Frame):
                     wx.CallAfter(self._on_add_page_phase, progress_dlg, _idx, _total,
                                 phase, current, blocks_total)
 
+                sounds.play("ocr_start")
                 try:
                     page = ocr.ocr_page(image_path, progress=report)
                 except _JobCancelled:
@@ -681,6 +994,7 @@ class LegibleFrame(wx.Frame):
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"Page {page_index}: {exc}")
                     continue
+                sounds.play("ocr_done")
                 added += 1
                 wx.CallAfter(self._on_add_page_one_done, page)
 
@@ -694,7 +1008,7 @@ class LegibleFrame(wx.Frame):
     def _on_scan_error(self, progress_dlg, message):
         progress_dlg.finish(wx.ID_CANCEL)
         self._end_busy()
-        wx.MessageBox(message, "Scanner error", wx.OK | wx.ICON_ERROR, self)
+        self._show_error(message, "Scanner error")
         self.set_status(f"Scan failed: {message}")
 
     def _on_scan_cancelled(self, progress_dlg):
@@ -728,6 +1042,7 @@ class LegibleFrame(wx.Frame):
         self._dirty = True
         self._refresh_list(select_index=index)
         self._last_added_index = index
+        self._maybe_announce_rotation(page)
 
     def _on_add_page_finished(self, progress_dlg, total, added, errors, cancelled):
         progress_dlg.finish(wx.ID_CANCEL if cancelled else wx.ID_OK)
@@ -779,7 +1094,7 @@ class LegibleFrame(wx.Frame):
         try:
             total_pages = importer.count_pages(paths)
         except importer.ImportError_ as exc:
-            wx.MessageBox(str(exc), "Import error", wx.OK | wx.ICON_ERROR, self)
+            self._show_error(str(exc), "Import error")
             return
         if total_pages == 0:
             self.set_status("Nothing to import.")
@@ -812,6 +1127,7 @@ class LegibleFrame(wx.Frame):
                     wx.CallAfter(self._on_import_phase, progress_dlg, _item, _idx,
                                 len(items), phase, current, total)
 
+                sounds.play("ocr_start")
                 try:
                     page = ocr.ocr_page(item.image_path, progress=report)
                 except _JobCancelled:
@@ -820,6 +1136,7 @@ class LegibleFrame(wx.Frame):
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"{item.label}: {exc}")
                     continue
+                sounds.play("ocr_done")
                 imported += 1
                 wx.CallAfter(self._on_import_page_done, page)
 
@@ -845,6 +1162,7 @@ class LegibleFrame(wx.Frame):
         index = self.session.add(page)
         self._dirty = True
         self._refresh_list(select_index=index)
+        self._maybe_announce_rotation(page)
 
     def _on_import_finished(self, progress_dlg, imported, errors, cancelled):
         progress_dlg.finish(wx.ID_CANCEL if cancelled else wx.ID_OK)
@@ -855,6 +1173,8 @@ class LegibleFrame(wx.Frame):
             message = f"Import complete. {imported} page(s) added."
             if errors:
                 message += f" {len(errors)} failed."
+            if imported:
+                sounds.play("import_done")
         self.set_status(message)
         self.announce(message)
         if errors:
@@ -865,11 +1185,11 @@ class LegibleFrame(wx.Frame):
     def _on_import_error(self, progress_dlg, message):
         progress_dlg.finish(wx.ID_CANCEL)
         self._end_busy()
-        wx.MessageBox(message, "Import error", wx.OK | wx.ICON_ERROR, self)
+        self._show_error(message, "Import error")
         self.set_status(f"Import failed: {message}")
 
     # ------------------------------------------------------------------
-    # Re-OCR all pages with a chosen engine (discards existing results)
+    # Re-OCR all pages with a chosen backend (discards existing results)
     # ------------------------------------------------------------------
     def on_reocr_all(self, event=None):
         if self._busy:
@@ -887,7 +1207,7 @@ class LegibleFrame(wx.Frame):
             default_idx = 0
 
         with wx.SingleChoiceDialog(
-            self, "Choose an OCR engine to re-run on every page:",
+            self, "Choose an OCR backend to re-run on every page:",
             "Re-OCR all pages", labels,
         ) as dlg:
             dlg.SetSelection(default_idx)
@@ -940,6 +1260,7 @@ class LegibleFrame(wx.Frame):
                     wx.CallAfter(self._on_reocr_phase, progress_dlg, _idx, _total,
                                 phase, current, blocks_total)
 
+                sounds.play("ocr_start")
                 try:
                     result = ocr.ocr_page_via(engine, page.image_path, progress=report)
                 except _JobCancelled:
@@ -948,6 +1269,7 @@ class LegibleFrame(wx.Frame):
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"Page {page_index}: {exc}")
                     continue
+                sounds.play("ocr_done")
                 updated += 1
                 wx.CallAfter(self._on_reocr_page_done, page, result)
 
@@ -961,7 +1283,7 @@ class LegibleFrame(wx.Frame):
     def _on_reocr_build_error(self, progress_dlg, message):
         progress_dlg.finish(wx.ID_CANCEL)
         self._end_busy()
-        wx.MessageBox(message, "Re-OCR error", wx.OK | wx.ICON_ERROR, self)
+        self._show_error(message, "Re-OCR error")
         self.set_status(f"Re-OCR failed: {message}")
 
     def _on_reocr_phase(self, progress_dlg, page_index, page_total, phase,
@@ -981,8 +1303,10 @@ class LegibleFrame(wx.Frame):
         page.blocks = result.blocks
         page.image_width = result.image_width
         page.image_height = result.image_height
+        page.rotation = result.rotation
         self._dirty = True
         self._refresh_list(select_index=self._current_index())
+        self._maybe_announce_rotation(page)
 
     def _on_reocr_finished(self, progress_dlg, total, updated, errors, engine_label,
                            cancelled):
@@ -1032,13 +1356,42 @@ class LegibleFrame(wx.Frame):
                 self._announce_engine_mode()
             else:
                 self.set_status("Settings unchanged.")
-        self.btn_add.SetFocus()
+        self.btn_more.SetFocus()
 
     # ------------------------------------------------------------------
     # Reorder / edit
     # ------------------------------------------------------------------
     def on_select_page(self, event=None):
         self._show_page_text(self._current_index())
+
+    def _on_listbox_context_menu(self, event):
+        # EVT_CONTEXT_MENU fires for a real right-click *and* for the
+        # keyboard Menu key / Shift+F10 - covering mouse and keyboard-only
+        # users the same way a native Explorer-style context menu would.
+        screen_pos = event.GetPosition()
+        client_pos = wx.DefaultPosition
+        if screen_pos != wx.DefaultPosition:
+            # Real right-click at a known position - select whichever page
+            # is under the cursor first (like Explorer does), rather than
+            # acting on a possibly different current selection.
+            client_pos = self.listbox.ScreenToClient(screen_pos)
+            hit = self.listbox.HitTest(client_pos)
+            if hit == wx.NOT_FOUND:
+                return
+            if hit != self._current_index():
+                self.listbox.SetSelection(hit)
+                self._show_page_text(hit)
+        if self._current_index() is None:
+            return
+
+        menu = wx.Menu()
+        self._popup_menu_item(menu, "Move &up\tCtrl+Up", self.on_move_up)
+        self._popup_menu_item(menu, "Move &down\tCtrl+Down", self.on_move_down)
+        self._popup_menu_item(menu, "&Rename\tF2", self.on_rename)
+        menu.AppendSeparator()
+        self._popup_menu_item(menu, "De&lete\tDelete", self.on_delete)
+        self.listbox.PopupMenu(menu, client_pos)
+        menu.Destroy()
 
     def _on_listbox_key_down(self, event):
         # Enter/Escape are NOT handled here - see _on_char_hook. Windows
@@ -1062,11 +1415,19 @@ class LegibleFrame(wx.Frame):
             event.Skip()  # let the listbox handle everything else (arrows, etc.)
 
     def _on_char_hook(self, event):
-        # Catches Enter (listbox -> full text) and Escape (full text ->
+        # Catches Enter (listbox -> page preview) and Escape (page preview ->
         # listbox) before Windows' dialog-navigation key handling can
         # swallow them - see the comment on _on_listbox_key_down. Bound on
         # the frame itself (the usual place for this hook), not the
         # individual controls.
+        #
+        # The Escape branch below only ever fires when text_area is the
+        # plain-text fallback control (no WebView backend available) or
+        # when the WebView itself, not its rendered content, has focus -
+        # once focus is inside the actual browser-rendered page, keystrokes
+        # are handled by the browser engine and never reach this hook at
+        # all; that case is covered separately, via a small injected script
+        # and AddScriptMessageHandler - see _make_page_preview.
         code = event.GetKeyCode()
         focus = wx.Window.FindFocus()
         if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and focus is self.listbox:
@@ -1260,14 +1621,19 @@ class LegibleFrame(wx.Frame):
             self.announce(message)
             return
         self._dirty = False
-        self.set_status(f"Exported {kind} to {os.path.basename(path)}.")
-        wx.MessageBox(f"Saved:\n{path}", "Export complete",
-                      wx.OK | wx.ICON_INFORMATION, self)
+        # No confirmation dialog - the status announcement (spoken
+        # immediately via announce(), same as every other completed job)
+        # plus the export_done sound cue are enough; a modal popup here
+        # would just be one more dialog to dismiss after every export.
+        message = f"Exported {kind} to {os.path.basename(path)}."
+        self.set_status(message)
+        self.announce(message)
+        sounds.play("export_done")
 
     def _on_export_error(self, progress_dlg, kind, message):
         progress_dlg.finish(wx.ID_CANCEL)
         self._end_busy()
-        wx.MessageBox(message, "Export error", wx.OK | wx.ICON_ERROR, self)
+        self._show_error(message, "Export error")
         self.set_status(f"{kind} export failed: {message}")
 
     def _ask_save(self, title, default_ext, wildcard):
@@ -1286,10 +1652,13 @@ class LegibleFrame(wx.Frame):
 
     # ------------------------------------------------------------------
     def _set_actions_enabled(self, enabled: bool):
-        for b in (self.btn_add, self.btn_import, self.btn_export_html,
-                  self.btn_export_pdf, self.btn_new, self.btn_settings,
-                  self.btn_up, self.btn_down, self.btn_delete, self.btn_rename,
-                  self.btn_reocr):
+        # Disabling btn_export/btn_more also blocks everything in their
+        # popup menus (Export to PDF/HTML; Import/New session/Settings/
+        # About/Help) - same effect as disabling each of those individually
+        # used to have. Move up/down/Rename/Delete (now the listbox's
+        # right-click menu, not buttons) and F1 Help are, as before, not
+        # gated by busy state here.
+        for b in (self.btn_add, self.btn_export, self.btn_more, self.btn_reocr):
             b.Enable(enabled)
 
 

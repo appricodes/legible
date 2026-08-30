@@ -42,6 +42,13 @@ class Page:
     # Assigned once by Session.add() and frozen from then on (see
     # list_label) - 0 means "not yet added to a session".
     auto_number: int = 0
+    # Degrees (0 or 180) legible.orientation detected the *source* scan
+    # image needs rotating to be upright - set by ocr.py, which already
+    # OCR's the corrected orientation and export.py, which already draws
+    # the corrected orientation into the PDF. Kept here only so the
+    # original scan file's actual orientation can still be reported to the
+    # user (see list_label) - image_path itself is never modified.
+    rotation: int = 0
 
     # ---- derived text helpers -------------------------------------------
 
@@ -62,12 +69,22 @@ class Page:
         renamed it (they own the whole string then), otherwise a default of
         "Page {auto_number}: {preview}". `auto_number` is assigned once by
         Session.add() and stays fixed after that - reordering pages (via
-        move up/down) never renumbers them, only Rename changes a title."""
+        move up/down) never renumbers them, only Rename changes a title.
+
+        When the *auto-generated* title is shown (never a Rename'd one -
+        the user owns that string once they've set it) and the original
+        scan was detected upside down, a "(scanned upside down...)" note is
+        inserted right after the page number - before the text preview, not
+        after it - so it's the first thing read/seen, without having to
+        open the page to notice, and so the user knows which way to
+        physically turn the paper original when filing it."""
         if self.custom_name.strip():
             return self.custom_name.strip()
+        prefix = f"Page {self.auto_number}"
+        if self.rotation == 180:
+            prefix += " (scanned upside down - rotate 180° before filing)"
         text = self.preview(length)
-        return (f"Page {self.auto_number}: {text}" if text
-               else f"Page {self.auto_number} (no text detected)")
+        return f"{prefix}: {text}" if text else f"{prefix} (no text detected)"
 
 
 @dataclass
