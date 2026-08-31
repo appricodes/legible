@@ -81,14 +81,19 @@ readers in mind.
   **native controls**. Screen readers (NVDA, JAWS, Narrator, VoiceOver, Orca)
   read those natively. (Tkinter is deliberately *not* used — it draws its own
   widgets and exposes no accessibility tree, so NVDA can't read it on Windows.)
-- Three buttons sit in the top bar, each with a mnemonic *and* a dedicated
-  global Ctrl+number shortcut (active anywhere in the window, in addition
-  to the mnemonic): **Add page** (Alt+A / **Ctrl+1**), **Export** (Alt+E /
-  **Ctrl+2** - a popup menu with **Export to PDF** and **Export to HTML**),
-  and **More** (Alt+M / **Ctrl+3** - a popup menu with Import, Start new
-  session, Settings, About, and Help). Each menu item has its own mnemonic,
-  active once that menu is open (e.g. press Alt+M then I for Import). F1
-  still opens Help directly, with either menu open or closed.
+- Three buttons sit in the top bar, each with a dedicated global Ctrl+number
+  shortcut (active anywhere in the window) and deliberately *no* mnemonic:
+  **Add page** (**Ctrl+1**), **Export** (**Ctrl+2** - a popup menu with
+  **Export to PDF** and **Export to HTML**), and **More** (**Ctrl+3** - a
+  popup menu with Import, Start new session, Settings, About, and Help). A
+  native button's screen-reader-announced shortcut always follows its own
+  mnemonic, so giving these an Alt+ mnemonic *and* a different real
+  shortcut (Ctrl+1/2/3) would have made screen readers announce the wrong
+  one; each button's accessible object overrides just that one property
+  (see `_ShortcutAccessible` in `legible/gui.py`) so NVDA/JAWS/Narrator
+  announce the real Ctrl+1/2/3 shortcut instead. Each menu item has its own
+  mnemonic, active once that menu is open (e.g. press Ctrl+3 then I for
+  Import). F1 still opens Help directly, with either menu open or closed.
   **Re-OCR all pages...** (Alt+O) is the only button left below the page
   list - it acts on the whole session, not a single page, unlike Move up/
   down/Rename/Delete, which live in the page list's own context menu (see

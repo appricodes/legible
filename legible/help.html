@@ -60,19 +60,19 @@ window stays responsive, and you can cancel partway through.</p>
 <h3>Export and More menus</h3>
 <p>Two more buttons sit next to Add page, each a popup menu:</p>
 <ul>
-  <li><strong>Export</strong> (<kbd>Alt</kbd>+<kbd>E</kbd> or
-  <kbd>Ctrl</kbd>+<kbd>2</kbd>) - <strong>Export to PDF</strong> and
-  <strong>Export to HTML</strong>.</li>
-  <li><strong>More</strong> (<kbd>Alt</kbd>+<kbd>M</kbd> or
-  <kbd>Ctrl</kbd>+<kbd>3</kbd>) - <strong>Import files...</strong>,
-  <strong>Start new session</strong>, <strong>Settings...</strong>,
-  <strong>About Legible...</strong>, and <strong>Help</strong>.</li>
+  <li><strong>Export</strong> (<kbd>Ctrl</kbd>+<kbd>2</kbd>) -
+  <strong>Export to PDF</strong> and <strong>Export to HTML</strong>.</li>
+  <li><strong>More</strong> (<kbd>Ctrl</kbd>+<kbd>3</kbd>) -
+  <strong>Import files...</strong>, <strong>Start new session</strong>,
+  <strong>Settings...</strong>, <strong>About Legible...</strong>, and
+  <strong>Help</strong>.</li>
 </ul>
 <p>Once a menu is open, each item has its own underlined-letter shortcut,
 same as any menu. Add page itself also has a <kbd>Ctrl</kbd>+<kbd>1</kbd>
 shortcut, matching Export's Ctrl+2 and More's Ctrl+3 - all three work
-anywhere in the window, in addition to (not instead of) the Alt+ mnemonics
-above.</p>
+anywhere in the window, and are each button's only shortcut (deliberately
+no Alt+ mnemonic, so a screen reader announces the real Ctrl+1/2/3 shortcut
+instead of a mismatched one).</p>
 
 <h3>Import files</h3>
 <p><strong>Import files...</strong> (in the More menu) loads existing image
@@ -206,14 +206,13 @@ rather than silently falling back to a placeholder result later.</div>
 <h3>Main window</h3>
 <table>
 <tr><th>Shortcut</th><th>Action</th></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>A</kbd> or <kbd>Ctrl</kbd>+<kbd>1</kbd></td><td>Add page (scan + OCR)</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>E</kbd> or <kbd>Ctrl</kbd>+<kbd>2</kbd></td><td>Open the Export menu</td></tr>
-<tr><td><kbd>Alt</kbd>+<kbd>M</kbd> or <kbd>Ctrl</kbd>+<kbd>3</kbd></td><td>Open the More menu</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>1</kbd></td><td>Add page (scan + OCR)</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>2</kbd></td><td>Open the Export menu</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>3</kbd></td><td>Open the More menu</td></tr>
 <tr><td><kbd>Alt</kbd>+<kbd>O</kbd></td><td>Re-OCR all pages...</td></tr>
 <tr><td><kbd>F1</kbd></td><td>Help (this page) - works whether a menu is open or closed</td></tr>
 </table>
-<p class="note">Ctrl+1/2/3 work anywhere in the window regardless of focus,
-in addition to (not instead of) the Alt+ mnemonics.</p>
+<p class="note">Ctrl+1/2/3 work anywhere in the window regardless of focus.</p>
 
 <h3>Export menu (once open - underlined letter, no Alt needed)</h3>
 <table>

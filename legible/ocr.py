@@ -162,25 +162,57 @@ def _rapid_weights_cached(lang_type: str) -> bool:
         return True
 
 
+#: Hugging Face repos Docling's own pipeline pulls from unconditionally
+#: (layout detection, table structure) regardless of which OCR backend is
+#: selected - see docling/models/stages/layout/layout_model.py
+#: (DOCLING_LAYOUT_HERON) and docling/models/stages/table_structure/
+#: table_structure_model.py.
+_DOCLING_HF_REPOS = (
+    "docling-project/docling-layout-heron",
+    "docling-project/docling-models",
+)
+
+
+def _hf_repo_cached(repo_id: str) -> bool:
+    """Best-effort check for whether a Hugging Face Hub repo's snapshot is
+    already fully downloaded to the local cache.
+
+    Docling downloads its own models via `huggingface_hub.snapshot_download()`
+    with no explicit `local_dir`, so they land in the *default* HF cache
+    (~/.cache/huggingface/hub, or wherever HF_HOME/HUGGINGFACE_HUB_CACHE
+    points) - NOT under Docling's own ~/.cache/docling. Reading
+    `huggingface_hub.constants.HF_HUB_CACHE` mirrors that resolution instead
+    of guessing a path.
+    """
+    try:
+        from huggingface_hub import constants as hf_constants
+
+        repo_folder = "models--" + repo_id.replace("/", "--")
+        snapshots_dir = os.path.join(hf_constants.HF_HUB_CACHE, repo_folder, "snapshots")
+        if not os.path.isdir(snapshots_dir):
+            return False
+        for snapshot in os.listdir(snapshots_dir):
+            snapshot_path = os.path.join(snapshots_dir, snapshot)
+            if os.path.isdir(snapshot_path) and os.listdir(snapshot_path):
+                return True
+        return False
+    except Exception:
+        return True
+
+
 def _docling_weights_cached(backend: str, lang_code: str) -> bool:
     """Best-effort check for whether Docling's own layout/table-structure
-    model, plus the selected backend's recognition model, are already on
-    disk - Docling's to ~/.cache/docling/models always; EasyOCR's to
-    ~/.EasyOCR/model, or RapidOCR's per _rapid_weights_cached(), depending
-    on `backend`. `lang_code` is the backend's own language code (i.e.
+    models (_DOCLING_HF_REPOS, via _hf_repo_cached), plus the selected
+    backend's recognition model - EasyOCR's to ~/.EasyOCR/model, or
+    RapidOCR's per _rapid_weights_cached() - are already on disk.
+    `lang_code` is the backend's own language code (i.e.
     _DoclingEngine._lang - RapidOCR's rapid_lang_type, unused for EasyOCR).
 
     Used only to choose between a "downloading model" and a "loading model"
     message. If we can't tell, we assume cached (the less alarming
     message).
     """
-    docling_dir = os.path.expanduser("~/.cache/docling/models")
-    if not os.path.isdir(docling_dir):
-        return False
-    try:
-        if not os.listdir(docling_dir):
-            return False
-    except OSError:
+    if not all(_hf_repo_cached(repo_id) for repo_id in _DOCLING_HF_REPOS):
         return False
 
     if backend == "rapidocr":

@@ -265,13 +265,21 @@ def _pdf_string_literal(text: str) -> str:
     return "(" + escapePDF(raw) + ")"
 
 
-def export_pdf(session: Session, out_path: str, title: str = "Scanned Document",
+def export_pdf(session: Session, out_path: str, title: "str | None" = None,
                jpeg_quality: int = 85, image_dpi: int = 300, progress=None,
                should_cancel=None) -> str:
     """Write a tagged PDF: each page shows the scanned image with an
     invisible, correctly-ordered text layer for screen readers, structured
     as real per-block PDF structure elements (see "STRUCTURE TAGGING"
     below) rather than one undifferentiated run of text per page.
+
+    `title`, if given, is embedded as the PDF's /Title metadata and shown
+    (see ViewerPreferences/DisplayDocTitle below) instead of the file name
+    in title bars/tabs. Left as None (the default), no /Title is written at
+    all - per the PDF spec, a reader with DisplayDocTitle set must then fall
+    back to showing the file name, so the title bar tracks the file's actual
+    name, including through a later rename, exactly like an ordinary PDF
+    with no author-set title.
 
     `jpeg_quality` (0-100) controls the size/quality of each page's embedded
     image (see _jpeg_for_pdf). `image_dpi` caps each image's resolution
@@ -287,7 +295,8 @@ def export_pdf(session: Session, out_path: str, title: str = "Scanned Document",
     from reportlab.pdfbase.pdfdoc import PDFArray, PDFDictionary, PDFName, PDFtrue
 
     c = canvas.Canvas(out_path, pagesize=A4)
-    c.setTitle(title)
+    if title:
+        c.setTitle(title)
     c.setCatalogEntry("Lang", "en")
 
     # ======================================================================
@@ -529,9 +538,16 @@ def export_pdf(session: Session, out_path: str, title: str = "Scanned Document",
     # than a second copy of the tree root.
     c.setCatalogEntry("StructTreeRoot", struct_root)
     c.setCatalogEntry("MarkInfo", PDFDictionary({"Marked": PDFtrue}))
-    # Required companion to a real title/tag tree: tells the reader to show
-    # (and announce) the document title rather than the file name.
-    c.setCatalogEntry("ViewerPreferences", PDFDictionary({"DisplayDocTitle": PDFtrue}))
+    if title:
+        # Companion to a real title/tag tree: tells the reader to show (and
+        # announce) the document title rather than the file name. Only set
+        # when there actually is a title - with no /Title in the Info
+        # dictionary, Adobe Reader doesn't fall back to the file name the
+        # way the PDF spec says it should; it shows "Unknown" instead. With
+        # this entry omitted entirely (the no-title/None default), readers
+        # fall back to their normal behavior, which is to show the file
+        # name, and that then tracks a later rename too.
+        c.setCatalogEntry("ViewerPreferences", PDFDictionary({"DisplayDocTitle": PDFtrue}))
 
     c.save()
     return out_path

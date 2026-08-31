@@ -13,15 +13,21 @@ Accessibility choices (work with NVDA / JAWS / Narrator / VoiceOver / Orca):
     what's happening (e.g. "Saving page 3 of 11...") and offers Cancel, so
     the user always knows the app is working and can stop a long job rather
     than having to wait it out or guess whether it's frozen.
-  * Keyboard mnemonics via "&" in labels (Alt+A add page, Alt+E export,
-    Alt+M open the More menu). wx draws the underline and wires the
-    accelerator automatically - same mechanism inside the Export/More popup
-    menus themselves (their own items each have a mnemonic, active once
-    that menu is open) and the page list's right-click/Menu-key context
-    menu (Move up/down, Rename, Delete). The three top buttons also have
-    dedicated global accelerators - Ctrl+1 Add page, Ctrl+2 Export, Ctrl+3
-    More - active anywhere in the window regardless of focus, in addition
-    to (not instead of) their Alt+ mnemonics.
+  * The three top buttons (Add page, Export, More) have dedicated global
+    Ctrl+1/2/3 accelerators, active anywhere in the window regardless of
+    focus - deliberately their *only* keyboard shortcut. They have no "&"
+    mnemonic in their labels: a native Win32 button's screen-reader-announced
+    keyboard shortcut is always derived from its own mnemonic character, so
+    an Alt+ mnemonic here would have made screen readers announce a
+    different shortcut than the actual (Ctrl+1/2/3) one - see
+    _ShortcutAccessible, which overrides just that one property (via
+    wx.Accessible - MSAA on Windows) so NVDA/JAWS/Narrator announce "Ctrl+1"
+    etc. instead, while every other accessible property (name, role,
+    default action) still falls through to the native button. Inside the
+    Export/More popup menus themselves, by contrast, each item's own "&"
+    mnemonic (active once that menu is open) is the standard, unproblematic
+    mechanism - same for the page list's right-click/Menu-key context menu
+    (Move up/down, Rename, Delete).
   * The page list is a native wx.ListBox: arrowing through it makes the screen
     reader speak the item text and its position ("3 of 8"). Move up/down,
     Rename, and Delete are reached via that context menu (mouse right-click,
@@ -615,6 +621,30 @@ class SettingsDialog(wx.Dialog):
         self.EndModal(wx.ID_OK)
 
 
+class _ShortcutAccessible(wx.Accessible):
+    """Overrides just the announced keyboard shortcut for one control, e.g.
+    so a screen reader says "Ctrl+1" for a button whose real shortcut is a
+    global accelerator rather than an "&" mnemonic (see the Add page/Export/
+    More buttons in _build_ui).
+
+    Every other wx.Accessible method is left at the base class's default,
+    which returns wxACC_NOT_IMPLEMENTED - wx's documented convention for
+    "fall back to the platform's native accessible object for this
+    property" (MSAA/IAccessible on Windows), so the name, role, state and
+    default action (activating the button) all keep working exactly as
+    they did before; only GetKeyboardShortcut is actually replaced.
+    """
+
+    def __init__(self, win, shortcut: str):
+        super().__init__(win)
+        self._shortcut = shortcut
+
+    def GetKeyboardShortcut(self, childId):
+        if childId == wx.ACC_SELF:
+            return (wx.ACC_OK, self._shortcut)
+        return (wx.ACC_NOT_IMPLEMENTED, "")
+
+
 class LegibleFrame(wx.Frame):
     _PHASE_MESSAGES = {
         "scan": "Scanning the page",
@@ -695,20 +725,29 @@ class LegibleFrame(wx.Frame):
         # Three buttons: Add page, Export (its own popup menu - PDF/HTML),
         # and More (everything else - see on_more_menu/on_export_menu).
         top = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_add = wx.Button(panel, label="&Add page (scan + OCR)")
+        # No "&" mnemonic on these three labels on purpose - see
+        # _ShortcutAccessible below and the class docstring's accessibility
+        # notes: Ctrl+1/2/3 (wired below) is each button's only keyboard
+        # shortcut, and a screen reader's announced shortcut for a native
+        # button always follows its own mnemonic, not any accelerator table
+        # entry - one of "&Add page" here would have announced "Alt+A", not
+        # the real "Ctrl+1" shortcut.
+        self.btn_add = wx.Button(panel, label="Add page (scan + OCR)")
         self.btn_add.Bind(wx.EVT_BUTTON, self.on_add_page)
+        self.btn_add.SetAccessible(_ShortcutAccessible(self.btn_add, "Ctrl+1"))
         top.Add(self.btn_add, 0, wx.ALL, 4)
-        self.btn_export = wx.Button(panel, label="&Export")
+        self.btn_export = wx.Button(panel, label="Export")
         self.btn_export.Bind(wx.EVT_BUTTON, self.on_export_menu)
+        self.btn_export.SetAccessible(_ShortcutAccessible(self.btn_export, "Ctrl+2"))
         top.Add(self.btn_export, 0, wx.ALL, 4)
-        self.btn_more = wx.Button(panel, label="&More")
+        self.btn_more = wx.Button(panel, label="More")
         self.btn_more.Bind(wx.EVT_BUTTON, self.on_more_menu)
+        self.btn_more.SetAccessible(_ShortcutAccessible(self.btn_more, "Ctrl+3"))
         top.Add(self.btn_more, 0, wx.ALL, 4)
 
         # Global accelerators, active anywhere in the window regardless of
-        # focus - Ctrl+1/2/3 for the three buttons above (in addition to
-        # their own Alt+ mnemonics), and F1 for Help everywhere, not just
-        # from inside the More menu.
+        # focus - Ctrl+1/2/3 for the three buttons above, and F1 for Help
+        # everywhere, not just from inside the More menu.
         add_page_accel_id = wx.NewIdRef()
         self.Bind(wx.EVT_MENU, self.on_add_page, id=add_page_accel_id)
         export_accel_id = wx.NewIdRef()
@@ -1566,6 +1605,10 @@ class LegibleFrame(wx.Frame):
         if not path:
             return
         pdf_cfg = app_settings.load_settings()
+        # No `title=` passed on purpose: export_pdf() then writes no /Title
+        # at all, so readers with DisplayDocTitle set (see export_pdf's
+        # docstring) fall back to the file name in the title bar - which
+        # then tracks a later rename too, unlike a baked-in title.
 
         def export_fn(progress, should_cancel):
             return export.export_pdf(self.session, path, jpeg_quality=pdf_cfg.pdf_image_quality,
