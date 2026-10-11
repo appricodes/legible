@@ -269,10 +269,14 @@ existing image or PDF instead.
 **Flatbed vs. Automatic Document Feeder:** Settings' **Paper source** dropdown
 only offers Flatbed/ADF when the selected scanner is actually reported to
 have them - "Automatic" (the default) leaves the scanner's own current
-source untouched. Choosing **ADF** scans every page currently loaded in the
-feeder in one Add page action, stopping automatically once it's empty; each
-page becomes its own entry in the list, in feed order. Verified against real
-WIA hardware (flatbed + ADF combo); TWAIN and SANE support the same choice
+source untouched, except that on a network scanner it uses the feeder
+whenever paper is loaded in it. Choosing **ADF** scans every page currently
+loaded in the feeder in one Add page action, stopping automatically once
+it's empty; each page becomes its own entry in the list, in feed order,
+cropped to A4 height. With WIA, feeder scans of network scanners go through
+the scanner's eSCL (AirScan) interface, because WIA's scripting API pulls
+every sheet through in one go but returns only the first page. Verified
+against real WIA hardware (Epson WF-2860, flatbed + ADF); TWAIN and SANE support the same choice
 using their own capability/source APIs, best-effort (not verified against
 real hardware for either backend) - if source selection has no effect on
 your scanner, it will still scan a single page as before.

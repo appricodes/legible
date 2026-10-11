@@ -12,7 +12,8 @@ cancel.
 Backends:
   * SANE   (Linux / macOS)  via the `sane` package (python-sane)
   * TWAIN  (Windows)        via the `twain` package (pytwain)
-  * WIA    (Windows)        via win32com (pywin32)
+  * WIA    (Windows)        via win32com (pywin32); feeder scans of network
+                            scanners go over eSCL instead (stdlib HTTP)
 
 WIA is implemented against real hardware (an Epson WF-2860, flatbed + ADF)
 and verified end to end, including the exact HRESULT an empty ADF feeder
@@ -25,6 +26,7 @@ to "flatbed only", never crash) wherever their behavior is unverified.
 
 from __future__ import annotations
 
+import io
 import os
 import tempfile
 from typing import List, Optional, Set, Tuple
@@ -311,6 +313,206 @@ def _scan_twain(device_id: str, dpi: int, color_mode: str, source: str) -> List[
 
 
 # --------------------------------------------------------------------------
+# eSCL / AirScan (network scanners) - used under the WIA backend for ADF
+# --------------------------------------------------------------------------
+# WIA's scripting layer (WIA.DeviceManager / Item.Transfer) is WIA 1.0 API.
+# On WIA 2.0 drivers - verified on the Epson WF-2860 with both its WSD and its
+# Epson USB driver - a single Transfer() in feeder mode pulls *every* sheet
+# through the feeder as one job but hands back only the first page; the next
+# Transfer() then fails (busy / unspecified error) and the other pages are
+# lost. eSCL, which most network multifunction printers speak, instead
+# returns feeder pages one at a time (GET .../NextDocument until 404), so
+# whenever the chosen WIA device is a network scanner that also answers
+# eSCL, feeder scans are done through it.
+_ESCL_NS = {
+    "scan": "http://schemas.hp.com/imaging/escl/2011/05/03",
+    "pwg": "http://www.pwg.org/schemas/2010/12/sm",
+}
+_ESCL_COLOR_MODE = {"color": "RGB24", "gray": "Grayscale8", "bw": "Grayscale8"}
+# Feeder scans cover the device's maximum length (here 14", US Legal), so
+# every A4 page comes back with a blank strip below the sheet; it is cropped
+# off afterwards. Asking the scanner for a shorter scan region instead makes
+# the WF-2860 stop the feed mid-sheet and report a paper jam.
+_A4_HEIGHT_INCHES = 11.69
+_ESCL_TIMEOUT = 120  # seconds; NextDocument blocks while a sheet is scanned
+
+
+def _escl_open(url: str, data: Optional[bytes] = None, method: Optional[str] = None,
+               timeout: float = 10):
+    import ssl
+    import urllib.request
+
+    req = urllib.request.Request(url, data=data, method=method)
+    if data is not None:
+        req.add_header("Content-Type", "text/xml")
+    # Printers serve eSCL over HTTPS with a self-signed certificate, so it
+    # can't be verified; this only ever talks to the scanner on the LAN.
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+
+
+def _escl_find_base_url(hosts: List[str]) -> Optional[str]:
+    """First "<scheme>://<host>" among `hosts` that answers eSCL, or None."""
+    for host in hosts:
+        for scheme in ("https", "http"):
+            base = f"{scheme}://{host}"
+            try:
+                with _escl_open(base + "/eSCL/ScannerCapabilities", timeout=5) as resp:
+                    if b"ScannerCapabilities" in resp.read():
+                        return base
+            except Exception:
+                continue
+    return None
+
+
+def _escl_capabilities(base: str):
+    import xml.etree.ElementTree as ET
+
+    with _escl_open(base + "/eSCL/ScannerCapabilities") as resp:
+        return ET.fromstring(resp.read())
+
+
+def _escl_adf_state(base: str) -> str:
+    """e.g. "ScannerAdfLoaded" / "ScannerAdfEmpty", or "" if unreported."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        with _escl_open(base + "/eSCL/ScannerStatus") as resp:
+            root = ET.fromstring(resp.read())
+        return root.findtext("scan:AdfState", "", _ESCL_NS)
+    except Exception:
+        return ""
+
+
+def _crop_to_a4_height(im, dpi: int):
+    """Drop the blank strip below an A4 sheet from a full-length feeder
+    scan (see _A4_HEIGHT_INCHES)."""
+    height = round(_A4_HEIGHT_INCHES * dpi)
+    return im.crop((0, 0, im.width, height)) if im.height > height else im
+
+
+def _escl_raise_if_jammed(base: str) -> None:
+    if _escl_adf_state(base) == "ScannerAdfJam":
+        raise ScannerError(
+            "Paper jam in the automatic document feeder. Remove the jammed "
+            "paper, reload the documents and try again."
+        )
+
+
+def _escl_raise_post_error(exc) -> None:
+    if exc.code == 409:  # Conflict: e.g. feeder empty / device busy
+        raise ScannerError(
+            "The scanner refused the feeder scan (feeder empty or "
+            "scanner busy). Load documents and try again."
+        )
+    raise ScannerError(f"eSCL scan failed (HTTP {exc.code}).")
+
+
+def _escl_pick_dpi(adf_caps, dpi: int) -> int:
+    values = [int(v.text) for v in adf_caps.iterfind(".//scan:DiscreteResolution/scan:XResolution", _ESCL_NS)
+              if v.text and v.text.isdigit()]
+    return min(values, key=lambda v: abs(v - dpi)) if values else dpi
+
+
+def _scan_escl_feeder(base: str, dpi: int, color_mode: str) -> List[str]:
+    """Scan every sheet in the feeder via eSCL; one PNG path per page."""
+    import urllib.error
+    import time
+    from PIL import Image as PILImage
+
+    caps = _escl_capabilities(base)
+    adf_caps = caps.find("scan:Adf/scan:AdfSimplexInputCaps", _ESCL_NS)
+    if adf_caps is None:
+        raise ScannerError("This scanner has no automatic document feeder.")
+    if _escl_adf_state(base) == "ScannerAdfEmpty":
+        raise ScannerError(
+            "No documents found in the automatic document feeder. Load "
+            "documents and try again."
+        )
+    res = _escl_pick_dpi(adf_caps, dpi)
+    settings_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="{_ESCL_NS['scan']}" xmlns:pwg="{_ESCL_NS['pwg']}">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:InputSource>Feeder</pwg:InputSource>
+  <scan:ColorMode>{_ESCL_COLOR_MODE.get(color_mode, "RGB24")}</scan:ColorMode>
+  <scan:XResolution>{res}</scan:XResolution>
+  <scan:YResolution>{res}</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:DocumentFormatExt>image/jpeg</scan:DocumentFormatExt>
+</scan:ScanSettings>"""
+
+    job = ""
+    for attempt in range(30):
+        try:
+            with _escl_open(base + "/eSCL/ScanJobs", data=settings_xml.encode("utf-8"),
+                            method="POST") as resp:
+                job = resp.headers.get("Location", "")
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code == 503 and attempt < 29:
+                time.sleep(1)  # still finishing a previous job
+                continue
+            _escl_raise_post_error(exc)
+        except OSError as exc:
+            raise ScannerError(f"Could not reach the scanner: {exc}")
+    if not job:
+        raise ScannerError("eSCL scan failed: the scanner returned no job.")
+    # Keep only the path: the Location header can name a different scheme
+    # or port than the one eSCL actually answers on (the WF-2860 returns an
+    # http:// URL to a port where NextDocument just hangs).
+    import urllib.parse
+    job = base + urllib.parse.urlparse(job).path.rstrip("/")
+
+    paths: List[str] = []
+    busy_retries = 0
+    finished = False
+    try:
+        while len(paths) < _ADF_MAX_PAGES:
+            try:
+                with _escl_open(job + "/NextDocument", timeout=_ESCL_TIMEOUT) as resp:
+                    data = resp.read()
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    finished = True
+                    break  # no more pages: feeder is empty
+                if exc.code == 503 and busy_retries < 30:
+                    busy_retries += 1
+                    time.sleep(1)  # page not ready yet
+                    continue
+                _escl_raise_if_jammed(base)
+                if paths:
+                    break
+                raise ScannerError(f"eSCL scan failed (HTTP {exc.code}).")
+            except OSError as exc:
+                _escl_raise_if_jammed(base)
+                if paths:
+                    break
+                raise ScannerError(f"Lost connection to the scanner: {exc}")
+            busy_retries = 0
+            path = _tmp_image_path(".png")
+            with PILImage.open(io.BytesIO(data)) as im:
+                im = _crop_to_a4_height(im, res)
+                if color_mode == "bw":
+                    im = im.convert("L").point(lambda v: 255 if v >= 128 else 0, mode="1")
+                im.save(path, format="PNG")
+            paths.append(path)
+    finally:
+        if not finished:
+            try:  # cancel the job so the scanner isn't left waiting
+                _escl_open(job, method="DELETE").close()
+            except Exception:
+                pass
+    if not paths:
+        raise ScannerError(
+            "No documents found in the automatic document feeder. Load "
+            "documents and try again."
+        )
+    return paths
+
+
+# --------------------------------------------------------------------------
 # WIA (Windows)
 # --------------------------------------------------------------------------
 # Scans via the low-level DeviceManager/Item/Transfer API rather than
@@ -459,6 +661,56 @@ def _wia_supported_source_keys(device_id: str) -> Set[str]:
         pythoncom.CoUninitialize()
 
 
+_escl_url_cache: dict = {}
+
+
+def _wia_escl_base_url(device_id: str) -> Optional[str]:
+    """eSCL base URL of the network scanner behind a WIA device, or None.
+
+    The host comes from the WIA device's "Presentation URL" (WSD devices
+    expose it). Windows' own eSCL WIA device doesn't, so for any device
+    whose port contains the printer's UUID, sibling devices with the same UUID
+    are checked too. Needs COM initialised by the caller."""
+    import re
+    import urllib.parse
+    import win32com.client  # type: ignore
+
+    if device_id in _escl_url_cache:
+        return _escl_url_cache[device_id]
+    manager = win32com.client.Dispatch("WIA.DeviceManager")
+    infos = list(manager.DeviceInfos)
+    if device_id:
+        own = [i for i in infos if i.DeviceID == device_id]
+    else:
+        own = [i for i in infos if _wia_device_type(i) == _WIA_SCANNER_DEVICE_TYPE][:1]
+
+    def prop(info, name):
+        try:
+            return str(info.Properties(name).Value or "")
+        except Exception:
+            return ""
+
+    uuid_re = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+    uuids = {u.lower() for i in own for u in uuid_re.findall(prop(i, "Port"))}
+    related = own + [
+        i for i in infos if i not in own
+        and uuids & {u.lower() for u in uuid_re.findall(prop(i, "Port"))}
+    ]
+    hosts = []
+    for info in related:
+        # "Presentation URL" is only on the connected device, not DeviceInfo.
+        try:
+            url = prop(info.Connect(), "Presentation URL")
+        except Exception:
+            continue
+        host = urllib.parse.urlparse(url).hostname
+        if host and host not in hosts:
+            hosts.append(host)
+    base = _escl_find_base_url(hosts) if hosts else None
+    _escl_url_cache[device_id] = base
+    return base
+
+
 def _set_wia_document_handling(device, source: str) -> None:
     if source == "auto":
         return  # leave the driver's current/default source untouched
@@ -469,9 +721,10 @@ def _set_wia_document_handling(device, source: str) -> None:
         pass  # device doesn't support switching source; proceed with its default
 
 
-def _wia_transfer_one(item) -> str:
-    """One Transfer() call -> a real PNG path. Raises pywintypes.com_error
-    on failure (e.g. paper empty)."""
+def _wia_transfer_one(item, crop_dpi: Optional[int] = None) -> str:
+    """One Transfer() call -> a real PNG path, cropped to A4 height at
+    `crop_dpi` if given (feeder scans). Raises pywintypes.com_error on
+    failure (e.g. paper empty)."""
     image = item.Transfer(_WIA_FORMAT_PNG)
     raw_path = _tmp_image_path(".wia")
     if os.path.exists(raw_path):
@@ -484,9 +737,17 @@ def _wia_transfer_one(item) -> str:
     from PIL import Image as PILImage
 
     path = _tmp_image_path(".png")
-    with PILImage.open(raw_path) as im:
+    with open(raw_path, "rb") as fh:
+        data = fh.read()
+    with PILImage.open(io.BytesIO(data)) as im:
+        if crop_dpi:
+            im = _crop_to_a4_height(im, crop_dpi)
         im.save(path, format="PNG")
-    os.remove(raw_path)
+    del image  # release the WIA ImageFile before deleting its backing file
+    try:
+        os.remove(raw_path)
+    except OSError:
+        pass  # still locked by the driver/AV scanner; it's only a temp file
     return path
 
 
@@ -499,6 +760,18 @@ def _scan_wia(device_id: str, dpi: int, color_mode: str, source: str) -> List[st
     pythoncom.CoInitialize()
     device = item = None
     try:
+        # Feeder scans of network scanners go through eSCL - see the eSCL
+        # section above for why WIA can't do them. "Automatic" uses the
+        # feeder too whenever paper is loaded in it, like the printer's own
+        # scan button does.
+        if source in ("adf", "auto"):
+            try:
+                base = _wia_escl_base_url(device_id)
+            except Exception:
+                base = None
+            if base and (source == "adf" or _escl_adf_state(base) == "ScannerAdfLoaded"):
+                return _scan_escl_feeder(base, dpi, color_mode)
+
         device, item = _wia_connect(device_id)
         _set_wia_document_handling(device, source)
 
@@ -516,7 +789,7 @@ def _scan_wia(device_id: str, dpi: int, color_mode: str, source: str) -> List[st
         paths: List[str] = []
         for _ in range(_ADF_MAX_PAGES if adf_batch else 1):
             try:
-                paths.append(_wia_transfer_one(item))
+                paths.append(_wia_transfer_one(item, dpi if adf_batch else None))
             except pywintypes.com_error as exc:  # type: ignore[attr-defined]
                 hr = _com_hresult(exc)
                 if hr in _WIA_CANCEL_HRESULTS:

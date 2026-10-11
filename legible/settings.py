@@ -18,7 +18,8 @@ SETTINGS_PATH = os.path.expanduser("~/.legible/settings.json")
 SCANNER_BACKENDS = ("auto", "sane", "twain", "wia")
 COLOR_MODES = ("color", "gray", "bw")
 # "auto" leaves the device's current/default paper source untouched (a single
-# page). "flatbed"/"adf" force that source; "adf" scans every page currently
+# page) - except for WIA network scanners, where it scans the whole feeder
+# whenever paper is loaded in it (see scanner._scan_wia). "flatbed"/"adf" force that source; "adf" scans every page currently
 # loaded in the feeder in one Add page action. Only offered in Settings when
 # scanner.list_sources() reports the selected device actually supports it.
 SCANNER_SOURCES = ("auto", "flatbed", "adf")
