@@ -85,7 +85,7 @@ import wx.html2
 
 from . import __version__, export, importer, languages, ocr, scanner, sounds, tts
 from . import settings as app_settings
-from .model import Session
+from .model import Session, back_side_index
 
 
 def _help_html_path() -> str:
@@ -669,6 +669,7 @@ class LegibleFrame(wx.Frame):
         self.session = Session()
         self._busy = False
         self._last_added_index = None
+        self._back_sides_base = None
         self._restore_focus_to = None
         # True once anything has changed the session's *content* (pages
         # added/deleted/reordered/re-OCR'd) since the last successful
@@ -979,10 +980,31 @@ class LegibleFrame(wx.Frame):
     # ------------------------------------------------------------------
     # Add page (scan + OCR) - scan_pages() returns one image per page; more
     # than one when scanning from an Automatic Document Feeder (Settings).
+    # The button opens a small menu first: append the new pages (4, 5, 6),
+    # or slot them in as the back sides of the pages already scanned, for
+    # two-sided letters scanned fronts first and then turned over - those
+    # backs arrive last-page-first (3B, 2B, 1B); see model.back_side_index.
     # ------------------------------------------------------------------
     def on_add_page(self, event=None):
         if self._busy:
             return
+        menu = wx.Menu()
+        self._popup_menu_item(menu, "&Next pages (4, 5, 6)",
+                              lambda: wx.CallAfter(self._start_add_page, False))
+        back_id = wx.NewIdRef()
+        menu.Append(back_id, "&Back sides, last page first (3B, 2B, 1B)")
+        self.Bind(wx.EVT_MENU, lambda evt: wx.CallAfter(self._start_add_page, True),
+                  id=back_id)
+        menu.Enable(back_id, len(self.session) > 0)
+        self.btn_add.PopupMenu(menu, (0, self.btn_add.GetSize().GetHeight()))
+        menu.Destroy()
+
+    def _start_add_page(self, back_sides: bool):
+        if self._busy:
+            return
+        # None for a normal append; otherwise the page count the back sides
+        # are matched against (see model.back_side_index).
+        self._back_sides_base = len(self.session) if back_sides else None
 
         # Both the scan and the OCR step now run on a background thread:
         # scanning is silent (which device/source and DPI/color-mode
@@ -1035,7 +1057,7 @@ class LegibleFrame(wx.Frame):
                     continue
                 sounds.play("ocr_done")
                 added += 1
-                wx.CallAfter(self._on_add_page_one_done, page)
+                wx.CallAfter(self._on_add_page_one_done, page, page_index - 1)
 
             wx.CallAfter(self._on_add_page_finished, progress_dlg, total, added,
                         errors, cancelled)
@@ -1073,11 +1095,15 @@ class LegibleFrame(wx.Frame):
             total=blocks_total if phase == "recognize" else None,
         )
 
-    def _on_add_page_one_done(self, page):
+    def _on_add_page_one_done(self, page, scan_index):
         # Add and show progress as each page completes, rather than waiting
         # for a whole ADF batch, so scanning several pages still gives live
         # feedback.
-        index = self.session.add(page)
+        if self._back_sides_base is None:
+            index = self.session.add(page)
+        else:
+            index = self.session.insert(
+                back_side_index(self._back_sides_base, scan_index), page)
         self._dirty = True
         self._refresh_list(select_index=index)
         self._last_added_index = index
@@ -1088,6 +1114,17 @@ class LegibleFrame(wx.Frame):
         self._end_busy()
         if cancelled:
             message = f"Add page cancelled. {added} of {total} scanned page(s) were added."
+        elif self._back_sides_base is not None and added:
+            message = (
+                f"Scan complete. {added} of {total} back side(s) inserted "
+                f"after their front pages. Now {len(self.session)} page(s) total."
+            )
+            if total > self._back_sides_base:
+                message += (
+                    f" Warning: {total} back sides were scanned but there were "
+                    f"only {self._back_sides_base} pages before, so the extra "
+                    "ones were put at the start of the list."
+                )
         elif total > 1:
             message = (
                 f"Scan complete. {added} of {total} page(s) added. "

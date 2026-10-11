@@ -53,6 +53,17 @@ and paper source to use are all configured once in <strong>Settings</strong>.
 If your scanner's <strong>paper source</strong> is set to <strong>Automatic
 Document Feeder</strong>, one click of Add page scans <em>every page
 currently loaded in the feeder</em> and adds them all, one after another.</p>
+<p>Add page first opens a small menu with two choices:</p>
+<ul>
+  <li><strong>Next pages (4, 5, 6)</strong> - the new pages are added at the
+  end of the list, as usual.</li>
+  <li><strong>Back sides, last page first (3B, 2B, 1B)</strong> - for
+  two-sided letters. Scan the front sides first, then turn the whole stack
+  over and choose this: the first page scanned goes to the end of the list,
+  as the back of the last page, and each following one goes after the page
+  before it, so the finished list reads 1, 1B, 2, 2B, 3, 3B. Only available
+  once there are pages in the list.</li>
+</ul>
 <p>Both the scan and the OCR step run in the background behind a progress
 dialog (see <a href="#background-jobs">Background jobs</a> below) - the
 window stays responsive, and you can cancel partway through.</p>
@@ -206,7 +217,7 @@ rather than silently falling back to a placeholder result later.</div>
 <h3>Main window</h3>
 <table>
 <tr><th>Shortcut</th><th>Action</th></tr>
-<tr><td><kbd>Ctrl</kbd>+<kbd>1</kbd></td><td>Add page (scan + OCR)</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>1</kbd></td><td>Add page (scan + OCR) - opens the next pages / back sides menu</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>2</kbd></td><td>Open the Export menu</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>3</kbd></td><td>Open the More menu</td></tr>
 <tr><td><kbd>Alt</kbd>+<kbd>O</kbd></td><td>Re-OCR all pages...</td></tr>

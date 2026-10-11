@@ -87,6 +87,16 @@ class Page:
         return f"{prefix}: {text}" if text else f"{prefix} (no text detected)"
 
 
+def back_side_index(page_count: int, scan_index: int) -> int:
+    """Where to insert the `scan_index`-th (0-based) page of a back-sides
+    batch, for two-sided documents scanned as fronts first, then the stack
+    turned over: the backs arrive in reverse order (3B, 2B, 1B), so the
+    first belongs after the last existing page, the next after the one
+    before it, and so on. `page_count` is the page count before the batch
+    began. Backs beyond the existing pages go to the start of the list."""
+    return max(0, page_count - scan_index)
+
+
 @dataclass
 class Session:
     """An ordered collection of pages."""
@@ -99,10 +109,15 @@ class Session:
     # ---- list operations -------------------------------------------------
 
     def add(self, page: Page) -> int:
+        return self.insert(len(self.pages), page)
+
+    def insert(self, index: int, page: Page) -> int:
+        """Insert `page` at `index` (clamped to the list). Returns its index."""
         page.auto_number = self._next_number
         self._next_number += 1
-        self.pages.append(page)
-        return len(self.pages) - 1
+        index = max(0, min(index, len(self.pages)))
+        self.pages.insert(index, page)
+        return index
 
     def delete(self, index: int) -> None:
         if 0 <= index < len(self.pages):

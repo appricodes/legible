@@ -10,7 +10,11 @@ readers in mind.
 - **Add page** — scans and runs OCR, with no chooser dialog: which
   scanner/device, paper source, and OCR settings to use are configured once
   in **Settings**. In **Automatic Document Feeder** mode, one Add page scans
-  *every page currently loaded in the feeder* and adds them all.
+  *every page currently loaded in the feeder* and adds them all. Add page
+  opens a menu first: **Next pages (4, 5, 6)** appends as usual; **Back
+  sides, last page first (3B, 2B, 1B)** is for two-sided letters - scan the
+  fronts, turn the stack over, and the backs are slotted in after their
+  fronts (the first one scanned goes last), giving 1, 1B, 2, 2B, 3, 3B.
 - **Upside-down detection** — every scan/import gets a best-effort check
   (via Tesseract's OSD classifier, if installed - see
   [Upside-down page detection](#upside-down-page-detection) below) for
